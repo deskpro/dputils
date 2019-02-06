@@ -2,18 +2,19 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/md5"
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/golang/glog"
+	"github.com/hashicorp/go-getter"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
-	"github.com/hashicorp/go-getter"
-	log "github.com/sirupsen/logrus"
-	"hash"
-	"os/exec"
-	"path/filepath"
+	"io"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -102,9 +103,9 @@ func init() {
 		`,
 	)
 
-	restoreCmd.Flags().String(
+	restoreCmd.Flags().Bool(
 		"skip-upgrade",
-		"",
+		false,
 		`
 			Skips the Deskpro upgrade step at the end. You can always run it your later if you want to.
 		`,
@@ -128,7 +129,7 @@ var restoreCmd = &cobra.Command{
 			tmpdir = os.TempDir()
 		}
 
-		log.Debug("tmpdir: ", tmpdir)
+		glog.V(1).Info("tmpdir: ", tmpdir)
 
 		//------------------------------
 		// Validate current deskpro
@@ -148,7 +149,7 @@ var restoreCmd = &cobra.Command{
 		dpConfig, err := GetDeskproConfig()
 
 		if err != nil {
-			log.Info("Failed to read config ", err)
+			glog.Error("Failed to read config ", err)
 			fmt.Println("We failed to read the Deskpro config files. Are they there?")
 			fmt.Println("To start fresh, you can install clean config files with this command:")
 			fmt.Println("")
@@ -160,7 +161,7 @@ var restoreCmd = &cobra.Command{
 			localDbUrl = getMysqlUrlFromConfig(dpConfig)
 			localDbConn, err = getMysqlConnectionFromConfig(dpConfig)
 			if err != nil {
-				log.Info("Failed to connect to db ", err)
+				glog.Error("Failed to connect to db ", err)
 				fmt.Println("The database details contained in config.database.php do not work. This is the error:")
 				fmt.Println(err)
 				fmt.Println("Please correct the database configuration and then try again.")
@@ -169,7 +170,7 @@ var restoreCmd = &cobra.Command{
 
 			res, err := localDbConn.Query("SHOW TABLES")
 			if err != nil {
-				log.Info("Failed to SHOW TABLES on local db ", err)
+				glog.Warning("Failed to SHOW TABLES on local db ", err)
 				fmt.Println("The database details contained in config.database.php do not work. This is the error:")
 				fmt.Println(err)
 				fmt.Println("Please correct the database configuration and then try again.")
@@ -177,7 +178,7 @@ var restoreCmd = &cobra.Command{
 			}
 
 			if res.Next() {
-				log.Info("local db has tables")
+				glog.Info("local db has tables")
 
 				// this checks for a count of settings matches the settings that get set upon install
 				// if these arent there, then we can assume its a new instance that hasnt even been configured yet
@@ -185,7 +186,7 @@ var restoreCmd = &cobra.Command{
 				settingCount := 0
 
 				if err != nil {
-					log.Info("scanning for settings failed ", err)
+					glog.Warning("scanning for settings failed ", err)
 					// an error (i.e. maybe tbale didnt exist) lets just use same handling as if its an install
 					settingCount = 3
 				} else {
@@ -195,7 +196,7 @@ var restoreCmd = &cobra.Command{
 				}
 
 				if settingCount == 3 {
-					log.Info("found some records that indicate real install")
+					glog.Info("found some records that indicate real install")
 					fmt.Println("The local db already contains tables. If this is a new server, then it might simply be the default demo installation.")
 					fmt.Println("You can wipe the installation with the following command: ")
 					fmt.Println("")
@@ -225,7 +226,7 @@ var restoreCmd = &cobra.Command{
 		var conn *sql.DB
 
 		if cmd.Flags().Changed("mysql-direct") {
-			log.Info("--mysq-client = ", mysqlUri)
+			glog.Info("--mysq-client = ", mysqlUri)
 
 			fmt.Println("Using direct MySQL connection to: ", mysqlUri)
 			fmt.Println("Testing connection...")
@@ -241,25 +242,25 @@ var restoreCmd = &cobra.Command{
 
 		} else if cmd.Flags().Changed("mysql-dump") {
 			dumpUri, _ := cmd.Flags().GetString("mysql-dump")
-			log.Info("--mysql-dump = ", dumpUri)
+			glog.Info("--mysql-dump = ", dumpUri)
 
 			fmt.Println("Using database dump from: ", dumpUri)
 
 			dbDumpLocal = filepath.Join(tmpdir, "db.sql")
-			log.Debug("save to", dbDumpLocal)
+			glog.Info("save to", dbDumpLocal)
 
 			fmt.Println("Downloading to temp file: ", dbDumpLocal)
 
 			err := getter.GetFile(dbDumpLocal, dumpUri)
 			if err != nil {
-				log.Debug("download dump failed: ", err)
+				glog.Warning("download dump failed: ", err)
 				fmt.Println("Failed to download database dump: ", err)
 				os.Exit(1)
 			}
 
 			fmt.Println("\tOK")
 		} else {
-			log.Debug("no --mysql-direct or --mysql-dump specified")
+			glog.Info("no --mysql-direct or --mysql-dump specified")
 			fmt.Println("We need a way to get the database. You can use either --mysql-direct or --mysql-dump. Check --help for more information.")
 			os.Exit(1)
 		}
@@ -276,14 +277,15 @@ var restoreCmd = &cobra.Command{
 
 		attachUri, _ := cmd.Flags().GetString("attachments")
 		if len(attachUri) < 1 {
-			log.Debug("no --attachments specified")
+			glog.Info("no --attachments specified")
 			fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
 			os.Exit(1)
 		}
 
 		if attachUri != "none" {
 			// turns a path into a suitable uri with placeholder string
-			// e.g. C:\foo\bar -> C:/foo/bar/%PATH%
+			// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
+			// so we can have a single string and get the path easily with a string replace
 
 			fmt.Println("Attachments will be loaded from: ", attachUri)
 
@@ -294,7 +296,7 @@ var restoreCmd = &cobra.Command{
 				attachUri = re.ReplaceAllString(attachUri, "/%PATH%$1")
 			}
 
-			log.Debug("--attachments is ", attachUri)
+			glog.Info("--attachments is ", attachUri)
 		} else {
 			fmt.Println("none -- skipping attachments")
 		}
@@ -303,7 +305,7 @@ var restoreCmd = &cobra.Command{
 		if conn != nil && attachUri != "none" {
 			res, err := conn.Query("SELECT save_path FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1")
 			if err != nil {
-				log.Info("failed blob select: ", err)
+				glog.Info("failed blob select: ", err)
 				fmt.Println("Trying to select an attachment record from the database failed: ", err)
 				os.Exit(1)
 			}
@@ -312,7 +314,7 @@ var restoreCmd = &cobra.Command{
 
 			if res.Next() {
 				if err := res.Scan(&savePath); err != nil {
-					log.Info("failed blob scan: ", err)
+					glog.Info("failed blob scan: ", err)
 					fmt.Println("Trying to select an attachment record from the database failed: ", err)
 					os.Exit(1)
 				}
@@ -322,7 +324,7 @@ var restoreCmd = &cobra.Command{
 
 			// if there are no fs blobs, then there are no attachments
 			if len(savePath) < 1 {
-				log.Info("no fs blobs, attachUri = none")
+				glog.Info("no fs blobs, attachUri = none")
 				fmt.Println("We detected no filesystem attachments in the database, so there are no attachments to copy over.")
 				fmt.Println("You can use --attachments=none to skip this step in future.")
 				attachUri = "none"
@@ -336,7 +338,7 @@ var restoreCmd = &cobra.Command{
 
 				err := getter.GetFile(expectFile, tmpFile)
 				if err != nil {
-					log.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
+					glog.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
 					fmt.Println("Failed to download test file: ", err, ". Expected: ", expectFile)
 					os.Exit(1)
 				}
@@ -423,11 +425,11 @@ var restoreCmd = &cobra.Command{
 
 			importCmd := exec.Command(
 				mysqlBin,
-				"-h", mysqlUrl.Host,
+				"-h", localDbUrl.Host,
 				"--port", localMysqlPort,
-				"-u", mysqlUrl.User.Username(),
+				"-u", localDbUrl.User.Username(),
 				"-p", localMysqlPass,
-				mysqlUrl.Path,
+				localDbUrl.Path,
 			)
 
 			dumpCmd.Stdout = writer
@@ -457,6 +459,8 @@ var restoreCmd = &cobra.Command{
 		// Restore files
 		//------------------------------
 
+		realAttachPath := filepath.Join(dpPath, "attachments")
+
 		if attachUri != "none" {
 			fmt.Println("=================================================")
 			fmt.Println("Restore Attachments")
@@ -470,9 +474,51 @@ var restoreCmd = &cobra.Command{
 			var batch []blobrec
 
 			for nextStartId < lastId {
+
+				fmt.Println("Batch starting ", nextStartId, "...")
+
 				batch = getNextBlobBatch(localDbUrl, nextStartId)
+
+				for _, blob := range batch {
+					blobPath := strings.Replace(attachUri, "%PATH%", blob.path, 1)
+					targetPath := filepath.Join(realAttachPath, filepath.FromSlash(blob.path))
+					doSkip := false
+
+					// already exists, check hash
+					if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+						doSkip = compareFileHash(targetPath, blob.hash)
+					}
+
+					if !doSkip {
+						err = getter.GetFile(
+							targetPath,
+							blobPath,
+						)
+					}
+
+					if err != nil {
+						fmt.Println("Failed to download blob: ", blobPath)
+					}
+				}
 			}
+
+			fmt.Println("Done all blobs")
 		}
+
+		// TODO handle move-attachments option
+
+		//------------------------------
+		// Run upgrade
+		//------------------------------
+
+		doSkipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
+
+		if !doSkipUpgrade {
+			//TODO perform upgrade
+		}
+
+		//TODO set flag that makes ES re-index
+		//TODO handle setting flags to disable email (for use with test instances)
 	},
 }
 
@@ -480,6 +526,22 @@ type blobrec struct {
 	id int64
 	path string
 	hash string
+}
+
+
+func compareFileHash(filePath string, expectHash string) bool {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false
+	}
+
+	return fmt.Sprintf("%x", md5.Sum(nil)) == expectHash
 }
 
 func getLastBlobId(murl url.URL) int64 {
@@ -509,7 +571,7 @@ func getLastBlobId(murl url.URL) int64 {
 	}
 }
 
-func getNextBlobBatch(murl url.URL, startId int) []blobrec {
+func getNextBlobBatch(murl url.URL, startId int64) []blobrec {
 	db, err := getMysqlConnection(murl)
 	if err != nil {
 		panic(err)
@@ -574,6 +636,14 @@ func getMysqlUrlFromUriString(uri string) url.URL {
 		pass, err = prompt.Run()
 	}
 
+	return *(&url.URL{
+		Scheme: "mysql",
+		User: url.UserPassword(murl.User.Username(), pass),
+		Host: murl.Host,
+		Path: murl.Path,
+		RawPath: murl.RawPath,
+		RawQuery: murl.RawQuery,
+	})
 }
 
 func getMysqlConnection(murl url.URL) (*sql.DB, error) {
@@ -602,8 +672,8 @@ func getMysqlConnectionFromConfig(dpConfig map[string]string) (*sql.DB, error) {
 	return nil, errors.New("not impl")
 }
 
-func getMysqlUrlFromConfig(dpConfig map[string]string) *url.URL {
-	url, err := url.Parse("mysql://" + dpConfig["database.user"] + ":" + dpConfig["database.password"] + "@" + dpConfig["database.host"] + "/" + dpConfig["database.dbname"])
+func getMysqlUrlFromConfig(dpConfig map[string]string) url.URL {
+	murl, err := url.Parse("mysql://" + dpConfig["database.user"] + ":" + dpConfig["database.password"] + "@" + dpConfig["database.host"] + "/" + dpConfig["database.dbname"])
 
 	if err != nil {
 		fmt.Println("Database connection in config.database.php is invalid or corrupt")
@@ -611,5 +681,5 @@ func getMysqlUrlFromConfig(dpConfig map[string]string) *url.URL {
 		os.Exit(1)
 	}
 
-	return url
+	return *murl
 }
