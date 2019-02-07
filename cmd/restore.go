@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/md5"
 	"database/sql"
-	"errors"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/hashicorp/go-getter"
@@ -381,16 +380,22 @@ var restoreCmd = &cobra.Command{
 		mysqlBin := dpConfig["paths.mysql_path"]
 		mysqlDumpBin := dpConfig["paths.mysqldump_path"]
 
+		localArgs := []string{
+			"-h", localDbUrl.Host,
+			"--port", localMysqlPort,
+			"-u", localDbUrl.User.Username(),
+		}
+		if localMysqlPass != "" {
+			localArgs = append(localArgs, "-p", localMysqlPass)
+		}
+		localArgs = append(localArgs, strings.TrimLeft(localDbUrl.Path, "/"))
+
 		if len(dbDumpLocal) > 1 {
 			fmt.Println("Restoring from database dump (this may take a while)...")
 
 			out, err := exec.Command(
 				mysqlBin,
-				"-h", localDbUrl.Host,
-				"--port", localMysqlPort,
-				"-u", localDbUrl.User.Username(),
-				"-p", localMysqlPass,
-				localDbUrl.Path,
+				localArgs...,
 			).CombinedOutput()
 			if err != nil {
 				fmt.Println(out)
@@ -406,6 +411,17 @@ var restoreCmd = &cobra.Command{
 				remoteMysqlPort = "3306"
 			}
 
+			remoteArgs := []string{
+				"-h", mysqlUrl.Host,
+				"--port", remoteMysqlPort,
+				"-u", mysqlUrl.User.Username(),
+				"-C",
+			}
+			if remoteMysqlPass != "" {
+				remoteArgs = append(remoteArgs, "-p", remoteMysqlPass)
+			}
+			remoteArgs = append(remoteArgs, strings.TrimLeft(mysqlUrl.Path, "/"))
+
 			reader, writer, err := os.Pipe()
 			if err != nil {
 				fmt.Println(err)
@@ -415,21 +431,12 @@ var restoreCmd = &cobra.Command{
 
 			dumpCmd := exec.Command(
 				mysqlDumpBin,
-				"-h", mysqlUrl.Host,
-				"--port", remoteMysqlPort,
-				"-u", mysqlUrl.User.Username(),
-				"-p", remoteMysqlPass,
-				"-C",
-				mysqlUrl.Path,
+				remoteArgs...
 			)
 
 			importCmd := exec.Command(
 				mysqlBin,
-				"-h", localDbUrl.Host,
-				"--port", localMysqlPort,
-				"-u", localDbUrl.User.Username(),
-				"-p", localMysqlPass,
-				localDbUrl.Path,
+				localArgs...
 			)
 
 			dumpCmd.Stdout = writer
@@ -443,6 +450,7 @@ var restoreCmd = &cobra.Command{
 			_ = importCmd.Start()
 			_ = dumpCmd.Wait()
 			_ = writer.Close()
+			_ = reader.Close()
 			err = importCmd.Wait()
 
 			if err != nil {
@@ -629,7 +637,7 @@ func getMysqlUrlFromUriString(uri string) url.URL {
 
 	if len(pass) < 1 {
 		prompt := promptui.Prompt{
-			Label:    "MySQL Password",
+			Label:    "MySQL Password (just hit enter if empty)",
 			Mask:     '*',
 		}
 
@@ -669,7 +677,7 @@ func getMysqlConnection(murl url.URL) (*sql.DB, error) {
 }
 
 func getMysqlConnectionFromConfig(dpConfig map[string]string) (*sql.DB, error) {
-	return nil, errors.New("not impl")
+	return getMysqlConnection(getMysqlUrlFromConfig(dpConfig))
 }
 
 func getMysqlUrlFromConfig(dpConfig map[string]string) url.URL {
