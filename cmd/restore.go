@@ -35,6 +35,36 @@ func init() {
 				deskpro:mypass@10.1.1.3/deskpro
 		`,
 	)
+	
+	restoreCmd.Flags().String(
+		"mysql-direct-audit",
+		"",
+		`
+			An additional information for audit database (it may be stored on a different mysql server).
+			If in your new config audit connection config exists we will restore audit db there otherwise we're going 
+			to restore audit database into default database.
+		`,
+	)
+
+	restoreCmd.Flags().String(
+		"mysql-direct-system",
+		"",
+		`
+			An additional information for system database (it may be stored on a different mysql server).
+			If in your new config system connection config exists we will restore system db there otherwise we're going 
+			to restore system database into default database.
+		`,
+	)
+
+	restoreCmd.Flags().String(
+		"mysql-direct-voice",
+		"",
+		`
+			An additional information for voice database (it may be stored on a different mysql server).
+			If in your new config voice connection config exists we will restore voice db there otherwise we're going 
+			to restore voice database into default database.
+		`,
+	)
 
 	restoreCmd.Flags().String(
 		"attachments",
@@ -88,7 +118,7 @@ func init() {
 				/mnt/db.sql.gz?checksum=md5:b7d96c89d09d9e204f5fedc4d5d55b21
 				/mnt/db.sql.gz?checksum=file:./db.sql.gz.sha256sum
 
-			You can use files from S3 buckets by adding query paramters for credentials:
+			You can use files from S3 buckets by adding query parameters for credentials:
 				s3::https://s3-eu-west-1.amazonaws.com/bucket/foo/db.sql.gz?aws_access_key_id=xxx&aws_access_key_secret=xxx&aws_access_token=xxx
 		`,
 	)
@@ -128,339 +158,14 @@ var restoreCmd = &cobra.Command{
 			tmpdir = os.TempDir()
 		}
 
+		var err error
+
 		glog.V(1).Info("tmpdir: ", tmpdir)
 
-		//------------------------------
-		// Validate current deskpro
-		//------------------------------
-
-		var localDbConn *sql.DB
-		var localDbUrl url.URL
-
-		fmt.Println("=================================================")
-		fmt.Println("This Deskpro server")
-		fmt.Println("=================================================")
-
-		fmt.Println("We will restore data onto this current server. Deskpro is installed here: ")
-		fmt.Println("\tDeskpro Path: ", GetDeskproPath())
-		fmt.Println("\tConfig Path: ", filepath.Join(GetDeskproPath(), "config"))
-
-		dpConfig, err := GetDeskproConfig()
-
-		if err != nil {
-			glog.Error("Failed to read config ", err)
-			fmt.Println("We failed to read the Deskpro config files. Are they there?")
-			fmt.Println("To start fresh, you can install clean config files with this command:")
-			fmt.Println("")
-			fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:fresh-config")
-			fmt.Println("")
-			fmt.Println("After config files are inserted, you will need to modify the config.database.php file with your database details.")
-			os.Exit(1)
-		} else {
-			localDbUrl = getMysqlUrlFromConfig(dpConfig)
-			localDbConn, err = getMysqlConnectionFromConfig(dpConfig)
-			if err != nil {
-				glog.Error("Failed to connect to db ", err)
-				fmt.Println("The database details contained in config.database.php do not work. This is the error:")
-				fmt.Println(err)
-				fmt.Println("Please correct the database configuration and then try again.")
-				os.Exit(1)
-			}
-
-			res, err := localDbConn.Query("SHOW TABLES")
-			if err != nil {
-				glog.Warning("Failed to SHOW TABLES on local db ", err)
-				fmt.Println("The database details contained in config.database.php do not work. This is the error:")
-				fmt.Println(err)
-				fmt.Println("Please correct the database configuration and then try again.")
-				os.Exit(1)
-			}
-
-			if res.Next() {
-				glog.Info("local db has tables")
-
-				// this checks for a count of settings matches the settings that get set upon install
-				// if these arent there, then we can assume its a new instance that hasnt even been configured yet
-				res, err = localDbConn.Query("SELECT COUNT(*) FROM settings WHERE name IN ('admin_has_loaded', 'core.license', 'core.setup_initial')")
-				settingCount := 0
-
-				if err != nil {
-					glog.Warning("scanning for settings failed ", err)
-					// an error (i.e. maybe tbale didnt exist) lets just use same handling as if its an install
-					settingCount = 3
-				} else {
-					if res.Next() {
-						_ = res.Scan(&settingCount)
-					}
-				}
-
-				if settingCount == 3 {
-					glog.Info("found some records that indicate real install")
-					fmt.Println("The local db already contains tables. If this is a new server, then it might simply be the default demo installation.")
-					fmt.Println("You can wipe the installation with the following command: ")
-					fmt.Println("")
-					fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:clean --keep-config")
-					fmt.Println("")
-					fmt.Println("After you have wiped the existing installation, try the restore again.")
-					os.Exit(1)
-				}
-			}
-		}
-
-		//------------------------------
-		// Database conn or dump
-		//------------------------------
-
-		fmt.Println("")
-		fmt.Println("=================================================")
-		fmt.Println("Your existing database to restore")
-		fmt.Println("=================================================")
-
-		//var attachLocal string
-		var dbDumpLocal string
-		var mysqlUrl url.URL
-
-		mysqlUri, _  := cmd.Flags().GetString("mysql-direct")
-
-		var conn *sql.DB
-
-		if cmd.Flags().Changed("mysql-direct") {
-			glog.Info("--mysq-client = ", mysqlUri)
-
-			fmt.Println("Using direct MySQL connection to: ", mysqlUri)
-			fmt.Println("Testing connection...")
-
-			mysqlUrl = getMysqlUrlFromUriString(mysqlUri)
-			conn, err = getMysqlConnection(mysqlUrl)
-
-			if err != nil {
-				fmt.Println("Failed to connect to remote database")
-				os.Exit(1)
-			}
-			fmt.Println("\tOK")
-
-		} else if cmd.Flags().Changed("mysql-dump") {
-			dumpUri, _ := cmd.Flags().GetString("mysql-dump")
-			glog.Info("--mysql-dump = ", dumpUri)
-
-			fmt.Println("Using database dump from: ", dumpUri)
-
-			dbDumpLocal = filepath.Join(tmpdir, "db.sql")
-			glog.Info("save to", dbDumpLocal)
-
-			fmt.Println("Downloading to temp file: ", dbDumpLocal)
-
-			err := getter.GetFile(dbDumpLocal, dumpUri)
-			if err != nil {
-				glog.Warning("download dump failed: ", err)
-				fmt.Println("Failed to download database dump: ", err)
-				os.Exit(1)
-			}
-
-			fmt.Println("\tOK")
-		} else {
-			glog.Info("no --mysql-direct or --mysql-dump specified")
-			fmt.Println("We need a way to get the database. You can use either --mysql-direct or --mysql-dump. Check --help for more information.")
-			os.Exit(1)
-		}
-
-		//------------------------------
-		// Attachments
-		//------------------------------
-
-		fmt.Println("=================================================")
-		fmt.Println("Attachments")
-		fmt.Println("=================================================")
-
-		//doMoveAttach, _ := cmd.Flags().GetBool("move-attachments")
-
-		attachUri, _ := cmd.Flags().GetString("attachments")
-		if len(attachUri) < 1 {
-			glog.Info("no --attachments specified")
-			fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
-			os.Exit(1)
-		}
-
-		if attachUri != "none" {
-			// turns a path into a suitable uri with placeholder string
-			// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
-			// so we can have a single string and get the path easily with a string replace
-
-			fmt.Println("Attachments will be loaded from: ", attachUri)
-
-			attachUri = strings.Replace(attachUri, "\\", "/", -1)
-
-			if !strings.Contains(attachUri, "%PATH%") {
-				re := regexp.MustCompile("/?(\\?.*)?$")
-				attachUri = re.ReplaceAllString(attachUri, "/%PATH%$1")
-			}
-
-			glog.Info("--attachments is ", attachUri)
-		} else {
-			fmt.Println("none -- skipping attachments")
-		}
-
-		// Verify a file just to validate
-		if conn != nil && attachUri != "none" {
-			res, err := conn.Query("SELECT save_path FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1")
-			if err != nil {
-				glog.Info("failed blob select: ", err)
-				fmt.Println("Trying to select an attachment record from the database failed: ", err)
-				os.Exit(1)
-			}
-
-			var savePath string
-
-			if res.Next() {
-				if err := res.Scan(&savePath); err != nil {
-					glog.Info("failed blob scan: ", err)
-					fmt.Println("Trying to select an attachment record from the database failed: ", err)
-					os.Exit(1)
-				}
-			}
-
-			_ = res.Close()
-
-			// if there are no fs blobs, then there are no attachments
-			if len(savePath) < 1 {
-				glog.Info("no fs blobs, attachUri = none")
-				fmt.Println("We detected no filesystem attachments in the database, so there are no attachments to copy over.")
-				fmt.Println("You can use --attachments=none to skip this step in future.")
-				attachUri = "none"
-
-			// try to download it
-			} else {
-				fmt.Println("Testing attachments option...")
-
-				expectFile := strings.Replace(attachUri, "%PATH%", savePath, 1)
-				tmpFile := filepath.Join(tmpdir, "test_file_dl")
-
-				err := getter.GetFile(expectFile, tmpFile)
-				if err != nil {
-					glog.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
-					fmt.Println("Failed to download test file: ", err, ". Expected: ", expectFile)
-					os.Exit(1)
-				}
-
-				fmt.Println("\tOK")
-			}
-		}
-
-		//------------------------------
-		// Restore database
-		//------------------------------
-
-		fmt.Println("=================================================")
-		fmt.Println("Restore Database")
-		fmt.Println("=================================================")
-
-		fmt.Println("Clearing existing database...")
-
-		tableList, _ := localDbConn.Query("SHOW TABLES")
-
-		_, _ = localDbConn.Exec("SET FOREIGN_KEY_CHECKS = 0")
-		for tableList.Next() {
-			var tableName string
-			_ = tableList.Scan(tableName)
-
-			if len(tableName) > 0 {
-				_, _ = localDbConn.Exec("DROP TABLE `" + tableName + "`")
-			}
-		}
-		_, _ = localDbConn.Exec("SET FOREIGN_KEY_CHECKS = 1")
-
-		fmt.Println("\tOK")
-
-		localMysqlPass, _ := localDbUrl.User.Password()
-		localMysqlPort := mysqlUrl.Port()
-		if len(localMysqlPort) < 1 {
-			localMysqlPort = "3306"
-		}
-
-		mysqlBin := dpConfig["paths.mysql_path"]
-		mysqlDumpBin := dpConfig["paths.mysqldump_path"]
-
-		localArgs := []string{
-			"-h", localDbUrl.Host,
-			"--port", localMysqlPort,
-			"-u", localDbUrl.User.Username(),
-		}
-		if localMysqlPass != "" {
-			localArgs = append(localArgs, "-p", localMysqlPass)
-		}
-		localArgs = append(localArgs, strings.TrimLeft(localDbUrl.Path, "/"))
-
-		if len(dbDumpLocal) > 1 {
-			fmt.Println("Restoring from database dump (this may take a while)...")
-
-			out, err := exec.Command(
-				mysqlBin,
-				localArgs...,
-			).CombinedOutput()
-			if err != nil {
-				fmt.Println(out)
-				fmt.Println("Failed to restore mysql dump: ", err)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Println("Restoring from mysqldump (this may take a while)...")
-
-			remoteMysqlPass, _ := localDbUrl.User.Password()
-			remoteMysqlPort := mysqlUrl.Port()
-			if len(remoteMysqlPort) < 1 {
-				remoteMysqlPort = "3306"
-			}
-
-			remoteArgs := []string{
-				"-h", mysqlUrl.Host,
-				"--port", remoteMysqlPort,
-				"-u", mysqlUrl.User.Username(),
-				"-C",
-			}
-			if remoteMysqlPass != "" {
-				remoteArgs = append(remoteArgs, "-p", remoteMysqlPass)
-			}
-			remoteArgs = append(remoteArgs, strings.TrimLeft(mysqlUrl.Path, "/"))
-
-			reader, writer, err := os.Pipe()
-			if err != nil {
-				fmt.Println(err)
-				fmt.Println("IO error -- failed to get pipes: ", err)
-				os.Exit(1)
-			}
-
-			dumpCmd := exec.Command(
-				mysqlDumpBin,
-				remoteArgs...
-			)
-
-			importCmd := exec.Command(
-				mysqlBin,
-				localArgs...
-			)
-
-			dumpCmd.Stdout = writer
-			importCmd.Stdin = reader
-
-			var buff bytes.Buffer
-			importCmd.Stdout = &buff
-			importCmd.Stderr = &buff
-
-			_ = dumpCmd.Start()
-			_ = importCmd.Start()
-			_ = dumpCmd.Wait()
-			_ = writer.Close()
-			_ = reader.Close()
-			err = importCmd.Wait()
-
-			if err != nil {
-				fmt.Println(buff.String())
-				fmt.Println("Failed to restore mysql dump: ", err)
-				os.Exit(1)
-			}
-		}
-
-		fmt.Println("\tOK")
+		localMysqlConn, dpConfig := validateDeskpro("database")
+		dbDumpLocal, mysqlDirect := validateDeskproDestination(cmd, tmpdir)
+		attachUri 				 := validateAttachments(cmd, mysqlDirect.conn, tmpdir)
+		restoreDatabase(localMysqlConn, mysqlDirect, dpConfig, dbDumpLocal)
 
 
 		//------------------------------
@@ -474,7 +179,7 @@ var restoreCmd = &cobra.Command{
 			fmt.Println("Restore Attachments")
 			fmt.Println("=================================================")
 
-			lastId := getLastBlobId(localDbUrl)
+			lastId := getLastBlobId(localMysqlConn.mysqlUrl)
 
 			var nextStartId int64
 			nextStartId = 1
@@ -485,7 +190,7 @@ var restoreCmd = &cobra.Command{
 
 				fmt.Println("Batch starting ", nextStartId, "...")
 
-				batch = getNextBlobBatch(localDbUrl, nextStartId)
+				batch = getNextBlobBatch(localMysqlConn.mysqlUrl, nextStartId)
 
 				for _, blob := range batch {
 					blobPath := strings.Replace(attachUri, "%PATH%", blob.path, 1)
@@ -530,10 +235,393 @@ var restoreCmd = &cobra.Command{
 	},
 }
 
+func validateDeskpro(prefix string) (mysqlConn, map[string]string) {
+
+	var (
+		localDbConn *sql.DB
+		localDbUrl url.URL
+		localMysqlConn mysqlConn
+	)
+
+	fmt.Println("=================================================")
+	fmt.Println("This Deskpro server")
+	fmt.Println("=================================================")
+
+	fmt.Println("We will restore data onto this current server. Deskpro is installed here: ")
+	fmt.Println("\tDeskpro Path: ", GetDeskproPath())
+	fmt.Println("\tConfig Path: ", filepath.Join(GetDeskproPath(), "config"))
+
+	dpConfig, err := GetDeskproConfig()
+
+	if err != nil {
+		glog.Error("Failed to read config ", err)
+		fmt.Println("We failed to read the Deskpro config files. Are they there?")
+		fmt.Println("To start fresh, you can install clean config files with this command:")
+		fmt.Println("")
+		fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:fresh-config")
+		fmt.Println("")
+		fmt.Println("After config files are inserted, you will need to modify the config.database.php file with your database details.")
+		os.Exit(1)
+	} else {
+		localDbUrl = getMysqlUrlFromConfig(dpConfig, prefix)
+		localDbConn, err = getMysqlConnectionFromConfig(dpConfig, prefix)
+		if err != nil {
+			glog.Error("Failed to connect to db ", err)
+			fmt.Println("The database details contained in config.database.php do not work. This is the error:")
+			fmt.Println(err)
+			fmt.Println("Please correct the database configuration and then try again.")
+			os.Exit(1)
+		}
+
+		localMysqlConn = mysqlConn{localDbUrl, localDbConn}
+
+		res, err := localDbConn.Query("SHOW TABLES")
+		if err != nil {
+			glog.Warning("Failed to SHOW TABLES on local db ", err)
+			fmt.Println("The database details contained in config.database.php do not work. This is the error:")
+			fmt.Println(err)
+			fmt.Println("Please correct the database configuration and then try again.")
+			os.Exit(1)
+		}
+
+		if res.Next() {
+			glog.Info("local db has tables")
+
+			// this checks for a count of settings matches the settings that get set upon install
+			// if these arent there, then we can assume its a new instance that hasnt even been configured yet
+			res, err = localDbConn.Query("SELECT COUNT(*) FROM settings WHERE name IN ('admin_has_loaded', 'core.license', 'core.setup_initial')")
+			settingCount := 0
+
+			if err != nil {
+				glog.Warning("scanning for settings failed ", err)
+				// an error (i.e. maybe tbale didnt exist) lets just use same handling as if its an install
+				settingCount = 3
+			} else {
+				if res.Next() {
+					_ = res.Scan(&settingCount)
+				}
+			}
+
+			if settingCount == 3 {
+				glog.Info("found some records that indicate real install")
+				fmt.Println("The local db already contains tables. If this is a new server, then it might simply be the default demo installation.")
+				fmt.Println("You can wipe the installation with the following command: ")
+				fmt.Println("")
+				fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:clean --keep-config")
+				fmt.Println("")
+				fmt.Println("After you have wiped the existing installation, try the restore again.")
+				os.Exit(1)
+			}
+		}
+	}
+
+	return localMysqlConn, dpConfig
+}
+
+func validateDeskproDestination(cmd *cobra.Command, tmpdir string) (string, mysqlConn) {
+	//------------------------------
+	// Database conn or dump
+	//------------------------------
+
+	fmt.Println("")
+	fmt.Println("=================================================")
+	fmt.Println("Your existing database to restore")
+	fmt.Println("=================================================")
+
+	//var attachLocal string
+	var (
+		dbDumpLocal string
+		mysqlDirect mysqlConn
+	)
+	if cmd.Flags().Changed("mysql-direct") {
+		mysqlDirect = validateDeskproDestinationDirect(cmd, "mysql-direct")
+	} else if cmd.Flags().Changed("mysql-dump") {
+		dbDumpLocal = validateDeskproDestinationDump(cmd, tmpdir)
+	} else {
+		glog.Info("no --mysql-direct or --mysql-dump specified")
+		fmt.Println("We need a way to get the database. You can use either --mysql-direct or --mysql-dump. Check --help for more information.")
+		os.Exit(1)
+	}
+
+	return dbDumpLocal, mysqlDirect
+}
+
+// validateDeskproDestination checks if destination database is ready to accept database dump which may be either
+// a file or a direct mysql connection to dump all tables with mysqldump
+func validateDeskproDestinationDirect(cmd *cobra.Command, flag string) mysqlConn {
+
+	//var attachLocal string
+	var mysqlDirect mysqlConn
+
+	mysqlUrl, conn := doValidateDeskproDestination(cmd, flag)
+	mysqlDirect = mysqlConn{mysqlUrl, conn}
+
+	return mysqlDirect
+}
+
+func validateDeskproDestinationDump(cmd *cobra.Command, tmpdir string) (string) {
+	var dbDumpLocal string
+
+	dumpUri, _ := cmd.Flags().GetString("mysql-dump")
+	glog.Info("--mysql-dump = ", dumpUri)
+
+	fmt.Println("Using database dump from: ", dumpUri)
+
+	dbDumpLocal = filepath.Join(tmpdir, "db.sql")
+	glog.Info("save to", dbDumpLocal)
+
+	fmt.Println("Downloading to temp file: ", dbDumpLocal)
+
+	err := getter.GetFile(dbDumpLocal, dumpUri)
+	if err != nil {
+		glog.Warning("download dump failed: ", err)
+		fmt.Println("Failed to download database dump: ", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\tOK")
+
+	return dbDumpLocal
+}
+
+func doValidateDeskproDestination(cmd *cobra.Command, flag string) (url.URL, *sql.DB) {
+	var mysqlUrl url.URL
+	var conn *sql.DB
+	var err error
+
+	mysqlUri, _ := cmd.Flags().GetString(flag)
+
+	glog.Info("--mysq-client = ", mysqlUri)
+
+	fmt.Println("Using direct MySQL connection to: ", mysqlUri)
+	fmt.Println("Testing connection...")
+
+	mysqlUrl = getMysqlUrlFromUriString(mysqlUri)
+	conn, err = getMysqlConnection(mysqlUrl)
+
+	if err != nil {
+		fmt.Println("Failed to connect to remote database")
+		os.Exit(1)
+	}
+	fmt.Println("\tOK")
+
+	return mysqlUrl, conn
+}
+
+
+// validateAttachments will perform general attachments validation and will return attachUri string which indicates
+// where attachments are stored
+func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string {
+	//------------------------------
+	// Attachments
+	//------------------------------
+
+	fmt.Println("=================================================")
+	fmt.Println("Attachments")
+	fmt.Println("=================================================")
+
+	//doMoveAttach, _ := cmd.Flags().GetBool("move-attachments")
+
+	attachUri, _ := cmd.Flags().GetString("attachments")
+	if len(attachUri) < 1 {
+		glog.Info("no --attachments specified")
+		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
+		os.Exit(1)
+	}
+
+	if attachUri != "none" {
+		// turns a path into a suitable uri with placeholder string
+		// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
+		// so we can have a single string and get the path easily with a string replace
+
+		fmt.Println("Attachments will be loaded from: ", attachUri)
+
+		attachUri = strings.Replace(attachUri, "\\", "/", -1)
+
+		if !strings.Contains(attachUri, "%PATH%") {
+			re := regexp.MustCompile("/?(\\?.*)?$")
+			attachUri = re.ReplaceAllString(attachUri, "/%PATH%$1")
+		}
+
+		glog.Info("--attachments is ", attachUri)
+	} else {
+		fmt.Println("none -- skipping attachments")
+	}
+
+	// Verify a file just to validate
+	if conn != nil && attachUri != "none" {
+		res, err := conn.Query("SELECT save_path FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1")
+		if err != nil {
+			glog.Info("failed blob select: ", err)
+			fmt.Println("Trying to select an attachment record from the database failed: ", err)
+			os.Exit(1)
+		}
+
+		var savePath string
+
+		if res.Next() {
+			if err := res.Scan(&savePath); err != nil {
+				glog.Info("failed blob scan: ", err)
+				fmt.Println("Trying to select an attachment record from the database failed: ", err)
+				os.Exit(1)
+			}
+		}
+
+		_ = res.Close()
+
+		// if there are no fs blobs, then there are no attachments
+		if len(savePath) < 1 {
+			glog.Info("no fs blobs, attachUri = none")
+			fmt.Println("We detected no filesystem attachments in the database, so there are no attachments to copy over.")
+			fmt.Println("You can use --attachments=none to skip this step in future.")
+			attachUri = "none"
+
+			// try to download it
+		} else {
+			fmt.Println("Testing attachments option...")
+
+			expectFile := strings.Replace(attachUri, "%PATH%", savePath, 1)
+			tmpFile := filepath.Join(tmpdir, "test_file_dl")
+
+			err := getter.GetFile(expectFile, tmpFile)
+			if err != nil {
+				glog.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
+				fmt.Println("Failed to download test file: ", err, ". Expected: ", expectFile)
+				os.Exit(1)
+			}
+
+			fmt.Println("\tOK")
+		}
+	}
+
+	return attachUri
+}
+
+// restoreDatabse performs actual database restore from remote db to local db
+// returns nothing
+func restoreDatabase(localMysqlConn mysqlConn, remoteMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string) {
+	fmt.Println("=================================================")
+	fmt.Println("Restore Database")
+	fmt.Println("=================================================")
+
+	fmt.Println("Clearing existing database...")
+
+	tableList, _ := localMysqlConn.conn.Query("SHOW TABLES")
+
+	_, _ = localMysqlConn.conn.Exec("SET FOREIGN_KEY_CHECKS = 0")
+	for tableList.Next() {
+		var tableName string
+		_ = tableList.Scan(tableName)
+
+		if len(tableName) > 0 {
+			_, _ = localMysqlConn.conn.Exec("DROP TABLE `" + tableName + "`")
+		}
+	}
+	_, _ = localMysqlConn.conn.Exec("SET FOREIGN_KEY_CHECKS = 1")
+
+	fmt.Println("\tOK")
+
+	localMysqlPass, _ := localMysqlConn.mysqlUrl.User.Password()
+	localMysqlPort := remoteMysqlConn.mysqlUrl.Port()
+	if len(localMysqlPort) < 1 {
+		localMysqlPort = "3306"
+	}
+
+	mysqlBin := dpConfig["paths.mysql_path"]
+	mysqlDumpBin := dpConfig["paths.mysqldump_path"]
+
+	localArgs := []string{
+		"-h", localMysqlConn.mysqlUrl.Host,
+		"--port", localMysqlPort,
+		"-u", localMysqlConn.mysqlUrl.User.Username(),
+	}
+	if localMysqlPass != "" {
+		localArgs = append(localArgs, "-p", localMysqlPass)
+	}
+	localArgs = append(localArgs, strings.TrimLeft(localMysqlConn.mysqlUrl.Path, "/"))
+
+	if len(dbDumpLocal) > 1 {
+		fmt.Println("Restoring from database dump (this may take a while)...")
+
+		out, err := exec.Command(
+			mysqlBin,
+			localArgs...,
+		).CombinedOutput()
+		if err != nil {
+			fmt.Println(out)
+			fmt.Println("Failed to restore mysql dump: ", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Restoring from mysqldump (this may take a while)...")
+
+		remoteMysqlPass, _ := localMysqlConn.mysqlUrl.User.Password()
+		remoteMysqlPort := remoteMysqlConn.mysqlUrl.Port()
+		if len(remoteMysqlPort) < 1 {
+			remoteMysqlPort = "3306"
+		}
+
+		remoteArgs := []string{
+			"-h", remoteMysqlConn.mysqlUrl.Host,
+			"--port", remoteMysqlPort,
+			"-u", remoteMysqlConn.mysqlUrl.User.Username(),
+			"-C",
+		}
+		if remoteMysqlPass != "" {
+			remoteArgs = append(remoteArgs, "-p", remoteMysqlPass)
+		}
+		remoteArgs = append(remoteArgs, strings.TrimLeft(remoteMysqlConn.mysqlUrl.Path, "/"))
+
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			fmt.Println(err)
+			fmt.Println("IO error -- failed to get pipes: ", err)
+			os.Exit(1)
+		}
+
+		dumpCmd := exec.Command(
+			mysqlDumpBin,
+			remoteArgs...
+		)
+
+		importCmd := exec.Command(
+			mysqlBin,
+			localArgs...
+		)
+
+		dumpCmd.Stdout = writer
+		importCmd.Stdin = reader
+
+		var buff bytes.Buffer
+		importCmd.Stdout = &buff
+		importCmd.Stderr = &buff
+
+		_ = dumpCmd.Start()
+		_ = importCmd.Start()
+		_ = dumpCmd.Wait()
+		_ = writer.Close()
+		_ = reader.Close()
+		err = importCmd.Wait()
+
+		if err != nil {
+			fmt.Println(buff.String())
+			fmt.Println("Failed to restore mysql dump: ", err)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Println("\tOK")
+}
+
 type blobrec struct {
 	id int64
 	path string
 	hash string
+}
+
+type mysqlConn struct {
+	mysqlUrl url.URL
+	conn *sql.DB
 }
 
 
@@ -676,11 +764,11 @@ func getMysqlConnection(murl url.URL) (*sql.DB, error) {
 	return db, nil
 }
 
-func getMysqlConnectionFromConfig(dpConfig map[string]string) (*sql.DB, error) {
-	return getMysqlConnection(getMysqlUrlFromConfig(dpConfig))
+func getMysqlConnectionFromConfig(dpConfig map[string]string, prefix string) (*sql.DB, error) {
+	return getMysqlConnection(getMysqlUrlFromConfig(dpConfig, prefix))
 }
 
-func getMysqlUrlFromConfig(dpConfig map[string]string) url.URL {
+func getMysqlUrlFromConfig(dpConfig map[string]string, prefix string) url.URL {
 	murl, err := url.Parse("mysql://" + dpConfig["database.user"] + ":" + dpConfig["database.password"] + "@" + dpConfig["database.host"] + "/" + dpConfig["database.dbname"])
 
 	if err != nil {
