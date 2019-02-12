@@ -10,6 +10,7 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -178,6 +179,8 @@ var restoreCmd = &cobra.Command{
 
 		glog.V(1).Info("tmpdir: ", tmpdir)
 
+
+
 		localMysqlConn, dpConfig := validateDeskpro("database")
 		dbDumpLocal, mysqlDirect := validateDeskproDestination(cmd, tmpdir)
 		attachUri 				 := validateAttachments(cmd, mysqlDirect.conn, tmpdir)
@@ -234,22 +237,74 @@ var restoreCmd = &cobra.Command{
 			fmt.Println("Done all blobs")
 		}
 
-		// TODO handle move-attachments option
-
-		//------------------------------
-		// Run upgrade
-		//------------------------------
-
 		doUpgrade(cmd)
 		doElasticReset(cmd, localMysqlConn)
+		markAsTestInstance(cmd, localMysqlConn)
+
+		fmt.Println("=================================================")
+		fmt.Println("Finished restoring your Deskpro instance. Thank you for using Deskpro.")
+		fmt.Println("=================================================")
 	},
+}
+
+func markAsTestInstance(cmd *cobra.Command, localMysqlConn mysqlConn) {
+	asTestInstance, _ := cmd.Flags().GetBool("as-test-instance")
+	if asTestInstance {
+		fmt.Println("=================================================")
+		fmt.Println("Marking your new Deskpro instance as test instance (email accounts)")
+		fmt.Println("=================================================")
+		fmt.Println("Disabling email accounts")
+		_, err := localMysqlConn.conn.Exec("UPDATE `email_accounts` SET `is_enabled` = 0")
+		if err != nil {
+			fmt.Println("\tOKFailed to disable accounts")
+		} else {
+			fmt.Println("\tOK")
+		}
+		fmt.Println("Disable url corrections and outgoing emails")
+
+		var re = regexp.MustCompile(`(\$SETTINGS\['disable_url_corrections'\]\s*=)\s*(true|false)(;)`)
+
+		configPath := filepath.Join(GetDeskproPath(), "config", "advanced", "config.settings.php")
+
+		bytesRead, err := ioutil.ReadFile(configPath)
+		if err != nil {
+			fmt.Println("\tCan't read config file.")
+			return
+		}
+
+		s := string(bytesRead)
+
+		if strings.Contains(s, "disable_url_corrections") && strings.Contains(s, "disable_outgoing_email") {
+			s = re.ReplaceAllString(s, "$1 true$3")
+
+			re = regexp.MustCompile(`(\$SETTINGS\['disable_outgoing_email'\]\s*=)\s*(true|false)(;)`)
+			s = re.ReplaceAllString(s, "$1 true$3")
+
+			err = ioutil.WriteFile(configPath, []byte(s), 0644)
+			if err != nil {
+				fmt.Println("\tCan't disable url corrections and outgoing email.")
+				return
+			}
+		} else {
+			if file, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0644); err != nil {
+				fmt.Println("\tCan't disable url corrections and outgoing email: can not open config file")
+			} else {
+				if _, err = file.Write([]byte("\r$SETTINGS['disable_url_corrections'] = true;")); err != nil {
+					fmt.Println("\tCan't disable url corrections and outgoing email: can't write config file")
+					return
+				}
+				if _, err = file.Write([]byte("\r$SETTINGS['disable_outgoing_email'] = true;")); err != nil {
+					fmt.Println("\tCan't disable url corrections and outgoing email: can't write config file")
+					return
+				}
+			}
+		}
+	}
 }
 
 func doElasticReset(cmd *cobra.Command, localMysqlConn mysqlConn) {
 	reindexElastic, _ := cmd.Flags().GetBool("reindex-elastic")
 	if reindexElastic {
-
-
 		fmt.Println("=================================================")
 		fmt.Println("Scheduling Elasticsearch indexation")
 		fmt.Println("=================================================")
@@ -277,7 +332,6 @@ func doElasticReset(cmd *cobra.Command, localMysqlConn mysqlConn) {
 }
 
 func doUpgrade(cmd *cobra.Command) {
-
 	skipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
 
 	fmt.Println("=================================================")
@@ -316,7 +370,6 @@ func doUpgrade(cmd *cobra.Command) {
 }
 
 func validateDeskpro(prefix string) (mysqlConn, map[string]string) {
-
 	var (
 		localDbConn *sql.DB
 		localDbUrl url.URL
@@ -580,6 +633,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 // restoreDatabse performs actual database restore from remote db to local db
 // returns nothing
 func restoreDatabase(localMysqlConn mysqlConn, remoteMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string) {
+
 	fmt.Println("=================================================")
 	fmt.Println("Restore Database")
 	fmt.Println("=================================================")
