@@ -140,6 +140,22 @@ func init() {
 		`,
 	)
 
+	restoreCmd.Flags().Bool(
+		"reindex-elastic",
+		false,
+		`
+			Schedules Elastic Search indexation.
+		`,
+	)
+
+	restoreCmd.Flags().Bool(
+		"as-test-instance",
+		false,
+		`
+			Disable email processing (make new Deskpro instance to be a test instance)
+		`,
+	)
+
 	rootCmd.AddCommand(restoreCmd)
 }
 
@@ -224,15 +240,48 @@ var restoreCmd = &cobra.Command{
 		// Run upgrade
 		//------------------------------
 
-		doSkipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
+		doUpgrade(cmd)
 
-		if !doSkipUpgrade {
-			//TODO perform upgrade
-		}
 
 		//TODO set flag that makes ES re-index
 		//TODO handle setting flags to disable email (for use with test instances)
 	},
+}
+
+func doUpgrade(cmd *cobra.Command) {
+
+	doSkipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
+
+	if doSkipUpgrade {
+		fmt.Println("Skipping upgrade")
+	}
+
+	phpPath := GetPhpPath()
+	upgradeCmd := exec.Command(
+		phpPath,
+		filepath.Join(GetDeskproPath(), "bin", "console"),
+		"dp:upgrade",
+	)
+
+	var buff bytes.Buffer
+	upgradeCmd.Stdout = &buff
+	upgradeCmd.Stderr = &buff
+
+	_ = upgradeCmd.Start()
+
+
+	err := upgradeCmd.Wait()
+
+	if err != nil {
+		fmt.Println("Deskpro upgrade failed!")
+		fmt.Println(buff.String())
+		fmt.Println(err)
+	} else {
+		fmt.Println("Deskpro upgrade success")
+		fmt.Println(buff.String())
+	}
+
+
 }
 
 func validateDeskpro(prefix string) (mysqlConn, map[string]string) {
