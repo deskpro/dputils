@@ -241,19 +241,52 @@ var restoreCmd = &cobra.Command{
 		//------------------------------
 
 		doUpgrade(cmd)
-
-
-		//TODO set flag that makes ES re-index
-		//TODO handle setting flags to disable email (for use with test instances)
+		doElasticReset(cmd, localMysqlConn)
 	},
+}
+
+func doElasticReset(cmd *cobra.Command, localMysqlConn mysqlConn) {
+	reindexElastic, _ := cmd.Flags().GetBool("reindex-elastic")
+	if reindexElastic {
+
+
+		fmt.Println("=================================================")
+		fmt.Println("Scheduling Elasticsearch indexation")
+		fmt.Println("=================================================")
+		fmt.Println("Setting elastic.requires_reset flag")
+		_, err := localMysqlConn.conn.Exec("INSERT INTO `settings` (`name`, `value`) VALUES ('elastica.requires_reset', 1) ON DUPLICATE KEY UPDATE `value` = 1")
+		if err != nil {
+			fmt.Println("\tOKFailed to set flag")
+		} else {
+			fmt.Println("\tOK")
+		}
+		fmt.Println("Updating Elastic indexer status")
+		_, err2 := localMysqlConn.conn.Exec("DELETE FROM `datastore` WHERE `name` = 'sys.es_indexer'")
+		if err2 != nil {
+			fmt.Println("\tOKFailed to reset indexer status")
+		} else {
+			fmt.Println("\tOK")
+		}
+
+		if err != nil || err2 != nil {
+			fmt.Println("Failed to schedule Elastic reindex")
+		} else {
+			fmt.Println("Scheduled Elasticsearch reindexation for next cron start")
+		}
+	}
 }
 
 func doUpgrade(cmd *cobra.Command) {
 
-	doSkipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
+	skipUpgrade, _ := cmd.Flags().GetBool("skip-upgrade")
 
-	if doSkipUpgrade {
-		fmt.Println("Skipping upgrade")
+	fmt.Println("=================================================")
+	fmt.Println("Running Deskpro upgrade")
+	fmt.Println("=================================================")
+
+	if skipUpgrade {
+		fmt.Println("Skipping upgrade, --skip-upgrade flag specified")
+		return
 	}
 
 	phpPath := GetPhpPath()
@@ -280,8 +313,6 @@ func doUpgrade(cmd *cobra.Command) {
 		fmt.Println("Deskpro upgrade success")
 		fmt.Println(buff.String())
 	}
-
-
 }
 
 func validateDeskpro(prefix string) (mysqlConn, map[string]string) {
