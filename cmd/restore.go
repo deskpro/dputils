@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 import _ "github.com/go-sql-driver/mysql"
@@ -175,8 +176,6 @@ var restoreCmd = &cobra.Command{
 			tmpdir = os.TempDir()
 		}
 
-		var err error
-
 		glog.V(1).Info("tmpdir: ", tmpdir)
 
 		fmt.Println("==========================================================================================")
@@ -199,57 +198,7 @@ var restoreCmd = &cobra.Command{
 		restoreDatabaseAdvanced(cmd, dpConfig, "voice")
 		restoreDatabaseAdvanced(cmd, dpConfig, "system")
 
-
-
-		//------------------------------
-		// Restore files
-		//------------------------------
-
-		realAttachPath := filepath.Join(dpPath, "attachments")
-
-		if attachUri != "none" {
-			fmt.Println("==========================================================================================")
-			fmt.Println("Restore Attachments")
-			fmt.Println("==========================================================================================")
-
-			lastId := getLastBlobId(destinationMysqlConn.mysqlUrl)
-
-			var nextStartId int64
-			nextStartId = 1
-
-			var batch []blobrec
-
-			for nextStartId < lastId {
-
-				fmt.Println("Batch starting ", nextStartId, "...")
-
-				batch = getNextBlobBatch(destinationMysqlConn.mysqlUrl, nextStartId)
-
-				for _, blob := range batch {
-					blobPath := strings.Replace(attachUri, "%PATH%", blob.path, 1)
-					targetPath := filepath.Join(realAttachPath, filepath.FromSlash(blob.path))
-					doSkip := false
-
-					// already exists, check hash
-					if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-						doSkip = compareFileHash(targetPath, blob.hash)
-					}
-
-					if !doSkip {
-						err = getter.GetFile(
-							targetPath,
-							blobPath,
-						)
-					}
-
-					if err != nil {
-						fmt.Println("Failed to download blob: ", blobPath)
-					}
-				}
-			}
-
-			fmt.Println("Done all blobs")
-		}
+		restoreAttachments(destinationMysqlConn, attachUri)
 
 		doUpgrade(cmd)
 		doElasticReset(cmd, destinationMysqlConn)
@@ -259,6 +208,64 @@ var restoreCmd = &cobra.Command{
 		fmt.Println("Finished restoring your Deskpro instance. Thank you for using Deskpro.")
 		fmt.Println("==========================================================================================")
 	},
+}
+
+func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string) {
+	realAttachPath := filepath.Join(dpPath, "attachments")
+
+	if attachUri != "none" {
+		fmt.Println("==========================================================================================")
+		fmt.Println("Restore Attachments")
+		fmt.Println("==========================================================================================")
+
+		lastId := getLastBlobId(destinationMysqlConn.mysqlUrl)
+
+		var (
+			err error
+			nextStartId int64 = 1
+			batch []blobrec
+			wg = new(sync.WaitGroup)
+		)
+
+		for nextStartId < lastId {
+
+			fmt.Println("Batch starting ", nextStartId, "...")
+			batch = getNextBlobBatch(destinationMysqlConn.conn, nextStartId)
+			if batch != nil {
+				b := batch[len(batch)-1]
+				nextStartId = b.id
+				wg.Add(1)
+				go func(batch []blobrec) {
+					defer wg.Done()
+					for _, blob := range batch {
+
+						blobPath := strings.Replace(attachUri, "%PATH%", blob.path, 1)
+						targetPath := filepath.Join(realAttachPath, filepath.FromSlash(blob.path))
+						doSkip := false
+
+						// already exists, check hash
+						if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+							doSkip = compareFileHash(targetPath, blob.hash)
+						}
+
+						if !doSkip {
+							err = getter.GetFile(
+								targetPath,
+								blobPath,
+							)
+						}
+
+						if err != nil {
+							fmt.Println("Failed to download blob: ", blobPath)
+						}
+					}
+				}(batch)
+			}
+		}
+		wg.Wait()
+
+		fmt.Println("Done all blobs")
+	}
 }
 
 func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbType string) {
@@ -653,7 +660,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 			expectFile := strings.Replace(attachUri, "%PATH%", savePath, 1)
 			tmpFile := filepath.Join(tmpdir, "test_file_dl")
 
-			err := getter.GetFile(expectFile, tmpFile)
+			err := getter.GetFile(tmpFile, expectFile)
 			if err != nil {
 				glog.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
 				fmt.Println("Failed to download test file: ", err, ". Expected: ", expectFile)
@@ -670,7 +677,6 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 // restoreDatabse performs actual database restore from remote db to local db
 // returns nothing
 func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string) {
-
 	fmt.Println("==========================================================================================")
 	fmt.Println("Restore Database")
 	fmt.Println("==========================================================================================")
@@ -816,7 +822,7 @@ func getLastBlobId(murl url.URL) int64 {
 		panic(err)
 	}
 
-	res, err := db.Query("SELECT id FROM blobs ORDER BY id DESC LIMIT 1")
+	res, err := db.Query("SELECT id FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1 ")
 
 	if err != nil {
 		panic(err)
@@ -837,23 +843,17 @@ func getLastBlobId(murl url.URL) int64 {
 	}
 }
 
-func getNextBlobBatch(murl url.URL, startId int64) []blobrec {
-	db, err := getMysqlConnection(murl)
-	if err != nil {
-		panic(err)
-	}
-
-	endId := (startId + 1000) - 1
+func getNextBlobBatch(db *sql.DB, startId int64) []blobrec {
 
 	res, err := db.Query(`
 		SELECT id, save_path, blob_hash
 		FROM blobs
 		WHERE
-			id BETWEEN ? AND ?
+			id > ?
 			AND storage_loc = 'fs'
 		ORDER BY id ASC
-		LIMIT 1000
-	`, startId, endId)
+		LIMIT 100
+	`, startId)
 
 	defer res.Close()
 
