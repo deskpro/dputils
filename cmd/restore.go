@@ -200,7 +200,7 @@ var restoreCmd = &cobra.Command{
 		destinationMysqlConn := validateDeskpro("database", dpConfig)
 		// this one needed to insure we have at least 1 default source connection or dump
 		dbDumpLocal, sourceMysqlConn := validateDeskproSource(cmd, tmpdir)
-		attachUri := validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
+		attachUri, moveAttachments := validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
 		restoreDatabase(destinationMysqlConn, sourceMysqlConn, dpConfig, dbDumpLocal)
 
 		// now let's check we have additional connections like audit, system or voice
@@ -208,7 +208,7 @@ var restoreCmd = &cobra.Command{
 		restoreDatabaseAdvanced(cmd, dpConfig, "voice")
 		restoreDatabaseAdvanced(cmd, dpConfig, "system")
 
-		restoreAttachments(destinationMysqlConn, attachUri)
+		restoreAttachments(destinationMysqlConn, attachUri, moveAttachments)
 
 		doUpgrade(cmd)
 		doElasticReset(cmd, destinationMysqlConn)
@@ -220,7 +220,7 @@ var restoreCmd = &cobra.Command{
 	},
 }
 
-func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string) {
+func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
 	realAttachPath := filepath.Join(dpPath, "attachments")
 
 	if attachUri != "none" {
@@ -259,10 +259,17 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string) {
 						}
 
 						if !doSkip {
-							err = getter.GetFile(
-								targetPath,
-								blobPath,
-							)
+							if moveAttachments {
+								err = os.Rename(
+									blobPath,
+									targetPath,
+								)
+							} else {
+								err = getter.GetFile(
+									targetPath,
+									blobPath,
+								)
+							}
 						}
 
 						if err != nil {
@@ -598,7 +605,7 @@ func doValidateDeskproSource(cmd *cobra.Command, flag string) (url.URL, *sql.DB)
 
 // validateAttachments will perform general attachments validation and will return attachUri string which indicates
 // where attachments are stored
-func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string {
+func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (string, bool) {
 	//------------------------------
 	// Attachments
 	//------------------------------
@@ -607,13 +614,23 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 	fmt.Println("Attachments")
 	fmt.Println("==========================================================================================")
 
-	//doMoveAttach, _ := cmd.Flags().GetBool("move-attachments")
-
 	attachUri, _ := cmd.Flags().GetString("attachments")
 	if len(attachUri) < 1 {
 		glog.Info("no --attachments specified")
 		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
 		os.Exit(1)
+	}
+
+	aUrl, err := url.Parse(attachUri)
+	if err != nil {
+		glog.Info("--attachments contains wrong URI")
+		fmt.Println("You must specify a correct path for attachments with --attachments. See --help for more information.")
+		os.Exit(1)
+	}
+	moveAttachments := false
+	if aUrl.Scheme == "" || aUrl.Scheme == "file" {
+		attachUri = aUrl.Path
+		moveAttachments, _ = cmd.Flags().GetBool("move-attachments")
 	}
 
 	archive, _ := cmd.Flags().GetBool("archive")
@@ -625,7 +642,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 	}
 
 	if archive {
-		fakename := "attachments" + time.Now().String()
+		fakename := "attachments" + fmt.Sprintf("%d", time.Now().Unix())
 		err := getter.GetAny(filepath.Join(tmpdir, fakename), attachUri)
 		if err != nil {
 			glog.Info("failed to load attachments archive: ", err)
@@ -633,6 +650,9 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 			os.Exit(1)
 		}
 		attachUri = filepath.Join(tmpdir, fakename)
+		// just to save space
+		// anyway we're going to download/copy archive in temp, so why keep files there?
+		moveAttachments = true
 	}
 
 	if attachUri != "none" {
@@ -700,7 +720,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 		}
 	}
 
-	return attachUri
+	return attachUri, moveAttachments
 }
 
 func detectArchive(uri string, tmpdir string) bool{
