@@ -188,15 +188,7 @@ var restoreCmd = &cobra.Command{
 
 		glog.V(1).Info("tmpdir: ", tmpdir)
 
-		fmt.Println("==========================================================================================")
-		fmt.Println("This Deskpro server")
-		fmt.Println("==========================================================================================")
-
-		fmt.Println("We will restore data onto this current server. Deskpro is installed here: ")
-		fmt.Println("\tDeskpro Path: ", GetDeskproPath())
-		fmt.Println("\tConfig Path: ", filepath.Join(GetDeskproPath(), "config"))
-
-		dpConfig := validateDeskproConfig()
+		dpConfig := Config.ValidateDeskproConfig(cmd)
 		destinationMysqlConn := validateDeskpro("database", dpConfig)
 		// this one needed to insure we have at least 1 default source connection or dump
 		dbDumpLocal, sourceMysqlConn := validateDeskproSource(cmd, tmpdir)
@@ -327,7 +319,7 @@ func markAsTestInstance(cmd *cobra.Command, destinationMysqlConn mysqlConn) {
 
 		var re = regexp.MustCompile(`(\$SETTINGS\['disable_url_corrections'\]\s*=)\s*(true|false)(;)`)
 
-		configPath := filepath.Join(GetDeskproPath(), "config", "advanced", "config.settings.php")
+		configPath := filepath.Join(Config.DpPath(), "config", "advanced", "config.settings.php")
 
 		bytesRead, err := ioutil.ReadFile(configPath)
 		if err != nil {
@@ -409,10 +401,10 @@ func doUpgrade(cmd *cobra.Command) {
 		return
 	}
 
-	phpPath := GetPhpPath()
+	phpPath := Config.PhpPath()
 	upgradeCmd := exec.Command(
 		phpPath,
-		filepath.Join(GetDeskproPath(), "bin", "console"),
+		filepath.Join(Config.DpPath(), "bin", "console"),
 		"dp:upgrade",
 	)
 
@@ -434,23 +426,7 @@ func doUpgrade(cmd *cobra.Command) {
 	}
 }
 
-func validateDeskproConfig() map[string]string {
 
-	dpConfig, err := GetDeskproConfig()
-
-	if err != nil {
-		glog.Error("Failed to read config ", err)
-		fmt.Println("We failed to read the Deskpro config files. Are they there?")
-		fmt.Println("To start fresh, you can install clean config files with this command:")
-		fmt.Println("")
-		fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:fresh-config")
-		fmt.Println("")
-		fmt.Println("After config files are inserted, you will need to modify the config.database.php file with your database details.")
-		os.Exit(1)
-	}
-
-	return dpConfig
-}
 
 func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 	var (
@@ -503,7 +479,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 			fmt.Println("The local db already contains tables. If this is a new server, then it might simply be the default demo installation.")
 			fmt.Println("You can wipe the installation with the following command: ")
 			fmt.Println("")
-			fmt.Println(GetPhpPath(), " ", filepath.Join(GetDeskproPath(), "bin", "console"), " install:clean --keep-config")
+			fmt.Println(Config.PhpPath(), " ", filepath.Join(Config.DpPath(), "bin", "console"), " install:clean --keep-config")
 			fmt.Println("")
 			os.Exit(1)
 		}

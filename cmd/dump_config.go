@@ -15,7 +15,7 @@ var dumpConfigCmd = &cobra.Command{
 	Use:   "dump_config",
 	Short: "Dumps current Deskpro config",
 	Run: func(cmd *cobra.Command, args []string) {
-		config, err := GetDeskproConfig()
+		config, err := Config.GetDeskproConfig()
 
 		if err != nil {
 			fmt.Println("Could not read config -- maybe it has not been installed?")

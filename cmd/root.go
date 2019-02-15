@@ -12,9 +12,13 @@ import (
 	"os/exec"
 )
 
-var cfgFile string
-var phpPath string
-var dpPath string
+var (
+	cfgFile string
+	phpPath string
+	dpPath  string
+	Config  util.Config
+)
+
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -106,17 +110,7 @@ func initConfig() {
 			glog.Info("Using Deskpro path: ", dpPath)
 		}
 	}
-}
 
-func GetDeskproConfig() (map[string]string, error) {
-	config, err := util.ReadDeskproConfigFile(phpPath, dpPath)
-	return config, err
-}
-
-func GetPhpPath() string {
-	return phpPath
-}
-
-func GetDeskproPath() string {
-	return dpPath
+	Config = util.Config{}
+	Config.SetPhpPath(phpPath).SetCfgFile(cfgFile).SetDpPath(dpPath)
 }
