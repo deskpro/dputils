@@ -18,8 +18,10 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
+import urlhelper "github.com/hashicorp/go-getter/helper/url"
 import _ "github.com/go-sql-driver/mysql"
 
 func init() {
@@ -85,6 +87,14 @@ func init() {
 			Examples:
 				https://example.com/deskpro/MRjUXQsZe6h6ESP4hCQReahM56xphf/attachments
 				s3::https://s3-eu-west-1.amazonaws.com/bucket/attachments/?aws_access_key_id=xxx&aws_access_key_secret=xxx&aws_access_token=xxx
+		`,
+	)
+
+	restoreCmd.Flags().Bool(
+		"archive",
+		false,
+		`
+			Set if you want to extract your attachments from an archive
 		`,
 	)
 
@@ -606,6 +616,25 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 		os.Exit(1)
 	}
 
+	archive, _ := cmd.Flags().GetBool("archive")
+
+	if !archive {
+		// try to detect archive from attachUri
+		// that was copy-pasted directly from go-getter
+		archive = detectArchive(attachUri, tmpdir)
+	}
+
+	if archive {
+		fakename := "attachments" + time.Now().String()
+		err := getter.GetAny(filepath.Join(tmpdir, fakename), attachUri)
+		if err != nil {
+			glog.Info("failed to load attachments archive: ", err)
+			fmt.Println("Trying to download attachments archive failed: ", err)
+			os.Exit(1)
+		}
+		attachUri = filepath.Join(tmpdir, fakename)
+	}
+
 	if attachUri != "none" {
 		// turns a path into a suitable uri with placeholder string
 		// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
@@ -672,6 +701,30 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 	}
 
 	return attachUri
+}
+
+func detectArchive(uri string, tmpdir string) bool{
+	c := getter.Client{
+		Src:     uri,
+		Dst:     filepath.Join(tmpdir, "fake"),
+		Mode:    getter.ClientModeAny,
+	}
+	c.Decompressors = getter.Decompressors
+
+	u, err := urlhelper.Parse(uri)
+	if err != nil {
+		return false
+	}
+	archive := ""
+	matchingLen := 0
+	for k := range c.Decompressors {
+		if strings.HasSuffix(u.Path, "."+k) && len(k) > matchingLen {
+			archive = k
+			matchingLen = len(k)
+		}
+	}
+
+	return archive != ""
 }
 
 // restoreDatabse performs actual database restore from remote db to local db
