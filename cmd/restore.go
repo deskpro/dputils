@@ -25,6 +25,17 @@ import urlhelper "github.com/hashicorp/go-getter/helper/url"
 import _ "github.com/go-sql-driver/mysql"
 
 func init() {
+	restoreCmd.Flags().StringP(
+		"full-backup",
+		"k",
+		"",
+		`
+			 Path to a ZIP containing a database.sql file and an attachments/ folder. 
+			 You generate this from any existing Deskpro server by using the 'dputils backup' command.
+			 This can be a filesystem path, a HTTP URL, or a S3 URL.
+		`,
+	)
+
 	restoreCmd.Flags().String(
 		"mysql-direct",
 		"",
@@ -190,10 +201,26 @@ var restoreCmd = &cobra.Command{
 
 		dpConfig := Config.ValidateDeskproConfig(cmd)
 		destinationMysqlConn := validateDeskpro("database", dpConfig)
-		// this one needed to insure we have at least 1 default source connection or dump
-		dbDumpLocal, sourceMysqlConn := validateDeskproSource(cmd, tmpdir)
-		attachUri, moveAttachments := validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
-		restoreDatabase(destinationMysqlConn, sourceMysqlConn, dpConfig, dbDumpLocal)
+
+		var (
+			moveAttachments bool
+			attachUri string
+			dbDumpLocal string
+			sourceMysqlConn mysqlConn
+		)
+
+		fullBackup, dbDumpLocal, attachUri  := checkFullBackup(cmd, tmpdir)
+
+		if !fullBackup {
+			// this one needed to insure we have at least 1 default source connection or dump
+			dbDumpLocal, sourceMysqlConn = validateDeskproSource(cmd, tmpdir)
+			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
+		} else {
+			moveAttachments = true
+			attachUri = transformAttachUri(attachUri)
+		}
+
+		restoreDatabase(destinationMysqlConn, sourceMysqlConn, dpConfig, dbDumpLocal, tmpdir)
 
 		// now let's check we have additional connections like audit, system or voice
 		restoreDatabaseAdvanced(cmd, dpConfig, "audit")
@@ -210,6 +237,27 @@ var restoreCmd = &cobra.Command{
 		fmt.Println("Finished restoring your Deskpro instance. Thank you for using Deskpro.")
 		fmt.Println("==========================================================================================")
 	},
+}
+
+func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string, string) {
+
+	backupUri, _ := cmd.Flags().GetString("full-backup")
+	if backupUri != "" {
+		fmt.Println("==========================================================================================")
+		fmt.Println("Detected a full backup flag. Restoring from the full backup archive")
+		fmt.Println("==========================================================================================")
+		fakename := "backup_archive" + fmt.Sprintf("%d", time.Now().Unix())
+		err := getter.GetAny(filepath.Join(tmpdir, fakename), backupUri)
+		if err != nil {
+			glog.Warning("Failed to get full backup archive ", err)
+			fmt.Println("Failed to get full backup archive")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		return true, filepath.Join(tmpdir, fakename, "database.sql.zip"), filepath.Join(tmpdir, fakename, "attachments")
+	}
+
+	return false, "", ""
 }
 
 func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
@@ -252,6 +300,13 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAt
 
 						if !doSkip {
 							if moveAttachments {
+								if _, err := os.Stat(filepath.Dir(targetPath)); os.IsNotExist(err) {
+									err := os.MkdirAll(filepath.Dir(targetPath), 0755)
+									if err != nil {
+										fmt.Println("Failed to create dir for blob: ", blobPath)
+										continue
+									}
+								}
 								err = os.Rename(
 									blobPath,
 									targetPath,
@@ -298,7 +353,7 @@ func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbT
 			os.Exit(1)
 		}
 		destinationMysqlConn := mysqlConn{destinationAuditMysqlUrl, destinationAuditMysqlConn}
-		restoreDatabase(destinationMysqlConn, auditSourceConnection, dpConfig, "")
+		restoreDatabase(destinationMysqlConn, auditSourceConnection, dpConfig, "", "")
 	}
 }
 
@@ -632,19 +687,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	}
 
 	if attachUri != "none" {
-		// turns a path into a suitable uri with placeholder string
-		// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
-		// so we can have a single string and get the path easily with a string replace
-
-		fmt.Println("Attachments will be loaded from: ", attachUri)
-
-		attachUri = strings.Replace(attachUri, "\\", "/", -1)
-
-		if !strings.Contains(attachUri, "%PATH%") {
-			re := regexp.MustCompile("/?(\\?.*)?$")
-			attachUri = re.ReplaceAllString(attachUri, "/%PATH%$1")
-		}
-
+		attachUri = transformAttachUri(attachUri)
 		glog.Info("--attachments is ", attachUri)
 	} else {
 		fmt.Println("none -- skipping attachments")
@@ -699,6 +742,23 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	return attachUri, moveAttachments
 }
 
+func transformAttachUri(attachUri string) string {
+	// turns a path into a suitable uri with placeholder string
+	// e.g. C:\foo\bar?some_option=value -> C:/foo/bar/%PATH%?some_option
+	// so we can have a single string and get the path easily with a string replace
+
+	fmt.Println("Attachments will be loaded from: ", attachUri)
+
+	attachUri = strings.Replace(attachUri, "\\", "/", -1)
+
+	if !strings.Contains(attachUri, "%PATH%") {
+		re := regexp.MustCompile("/?(\\?.*)?$")
+		attachUri = re.ReplaceAllString(attachUri, "/%PATH%$1")
+	}
+
+	return attachUri
+}
+
 func detectArchive(uri string, tmpdir string) bool{
 	c := getter.Client{
 		Src:     uri,
@@ -725,7 +785,7 @@ func detectArchive(uri string, tmpdir string) bool{
 
 // restoreDatabse performs actual database restore from remote db to local db
 // returns nothing
-func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string) {
+func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string, tmpdir string) {
 	fmt.Println("==========================================================================================")
 	fmt.Println("Restore Database")
 	fmt.Println("==========================================================================================")
@@ -764,10 +824,24 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 	if localMysqlPass != "" {
 		localArgs = append(localArgs, "-p", localMysqlPass)
 	}
+	archive := detectArchive(dbDumpLocal, tmpdir)
+	if archive {
+		newPath := filepath.Join(tmpdir, "deskpro_database.sql" + fmt.Sprintf("%d", time.Now().Unix()))
+		err := getter.GetFile(newPath, dbDumpLocal)
+		if err != nil {
+			glog.Warning("Failed to unarchive backup file", err)
+			fmt.Println("Failed to unarchive backup file")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		dbDumpLocal = newPath
+	}
 	localArgs = append(localArgs, strings.TrimLeft(destinationMysqlConn.mysqlUrl.Path, "/"))
 
 	if len(dbDumpLocal) > 1 {
 		fmt.Println("Restoring from database dump (this may take a while)...")
+		
+		localArgs = append(localArgs, "-e", "source " + dbDumpLocal)
 
 		out, err := exec.Command(
 			mysqlBin,
