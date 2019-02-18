@@ -18,8 +18,10 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
+import urlhelper "github.com/hashicorp/go-getter/helper/url"
 import _ "github.com/go-sql-driver/mysql"
 
 func init() {
@@ -85,6 +87,14 @@ func init() {
 			Examples:
 				https://example.com/deskpro/MRjUXQsZe6h6ESP4hCQReahM56xphf/attachments
 				s3::https://s3-eu-west-1.amazonaws.com/bucket/attachments/?aws_access_key_id=xxx&aws_access_key_secret=xxx&aws_access_token=xxx
+		`,
+	)
+
+	restoreCmd.Flags().Bool(
+		"archive",
+		false,
+		`
+			Set if you want to extract your attachments from an archive
 		`,
 	)
 
@@ -190,7 +200,7 @@ var restoreCmd = &cobra.Command{
 		destinationMysqlConn := validateDeskpro("database", dpConfig)
 		// this one needed to insure we have at least 1 default source connection or dump
 		dbDumpLocal, sourceMysqlConn := validateDeskproSource(cmd, tmpdir)
-		attachUri := validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
+		attachUri, moveAttachments := validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
 		restoreDatabase(destinationMysqlConn, sourceMysqlConn, dpConfig, dbDumpLocal)
 
 		// now let's check we have additional connections like audit, system or voice
@@ -198,7 +208,7 @@ var restoreCmd = &cobra.Command{
 		restoreDatabaseAdvanced(cmd, dpConfig, "voice")
 		restoreDatabaseAdvanced(cmd, dpConfig, "system")
 
-		restoreAttachments(destinationMysqlConn, attachUri)
+		restoreAttachments(destinationMysqlConn, attachUri, moveAttachments)
 
 		doUpgrade(cmd)
 		doElasticReset(cmd, destinationMysqlConn)
@@ -210,7 +220,7 @@ var restoreCmd = &cobra.Command{
 	},
 }
 
-func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string) {
+func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
 	realAttachPath := filepath.Join(dpPath, "attachments")
 
 	if attachUri != "none" {
@@ -249,10 +259,17 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string) {
 						}
 
 						if !doSkip {
-							err = getter.GetFile(
-								targetPath,
-								blobPath,
-							)
+							if moveAttachments {
+								err = os.Rename(
+									blobPath,
+									targetPath,
+								)
+							} else {
+								err = getter.GetFile(
+									targetPath,
+									blobPath,
+								)
+							}
 						}
 
 						if err != nil {
@@ -588,7 +605,7 @@ func doValidateDeskproSource(cmd *cobra.Command, flag string) (url.URL, *sql.DB)
 
 // validateAttachments will perform general attachments validation and will return attachUri string which indicates
 // where attachments are stored
-func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string {
+func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (string, bool) {
 	//------------------------------
 	// Attachments
 	//------------------------------
@@ -597,13 +614,45 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 	fmt.Println("Attachments")
 	fmt.Println("==========================================================================================")
 
-	//doMoveAttach, _ := cmd.Flags().GetBool("move-attachments")
-
 	attachUri, _ := cmd.Flags().GetString("attachments")
 	if len(attachUri) < 1 {
 		glog.Info("no --attachments specified")
 		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
 		os.Exit(1)
+	}
+
+	aUrl, err := url.Parse(attachUri)
+	if err != nil {
+		glog.Info("--attachments contains wrong URI")
+		fmt.Println("You must specify a correct path for attachments with --attachments. See --help for more information.")
+		os.Exit(1)
+	}
+	moveAttachments := false
+	if aUrl.Scheme == "" || aUrl.Scheme == "file" {
+		attachUri = aUrl.Path
+		moveAttachments, _ = cmd.Flags().GetBool("move-attachments")
+	}
+
+	archive, _ := cmd.Flags().GetBool("archive")
+
+	if !archive {
+		// try to detect archive from attachUri
+		// that was copy-pasted directly from go-getter
+		archive = detectArchive(attachUri, tmpdir)
+	}
+
+	if archive {
+		fakename := "attachments" + fmt.Sprintf("%d", time.Now().Unix())
+		err := getter.GetAny(filepath.Join(tmpdir, fakename), attachUri)
+		if err != nil {
+			glog.Info("failed to load attachments archive: ", err)
+			fmt.Println("Trying to download attachments archive failed: ", err)
+			os.Exit(1)
+		}
+		attachUri = filepath.Join(tmpdir, fakename)
+		// just to save space
+		// anyway we're going to download/copy archive in temp, so why keep files there?
+		moveAttachments = true
 	}
 
 	if attachUri != "none" {
@@ -671,7 +720,31 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) string
 		}
 	}
 
-	return attachUri
+	return attachUri, moveAttachments
+}
+
+func detectArchive(uri string, tmpdir string) bool{
+	c := getter.Client{
+		Src:     uri,
+		Dst:     filepath.Join(tmpdir, "fake"),
+		Mode:    getter.ClientModeAny,
+	}
+	c.Decompressors = getter.Decompressors
+
+	u, err := urlhelper.Parse(uri)
+	if err != nil {
+		return false
+	}
+	archive := ""
+	matchingLen := 0
+	for k := range c.Decompressors {
+		if strings.HasSuffix(u.Path, "."+k) && len(k) > matchingLen {
+			archive = k
+			matchingLen = len(k)
+		}
+	}
+
+	return archive != ""
 }
 
 // restoreDatabse performs actual database restore from remote db to local db
