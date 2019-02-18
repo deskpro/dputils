@@ -2,14 +2,14 @@ package cmd
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"github.com/deskpro/dputils/util"
-	"github.com/golang/glog"
 	"github.com/manifoldco/promptui"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"os"
 	"os/exec"
+	"path"
 )
 
 var (
@@ -37,24 +37,26 @@ func Execute() {
 }
 
 func init() {
-	flag.Parse()
+	log.SetFormatter(&log.JSONFormatter{})
+	log.SetLevel(log.ErrorLevel)
+
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.dputils.yaml)")
 	rootCmd.PersistentFlags().StringVar(&dpPath, "deskpro", "", "Path to Deskpro on the current server")
-	rootCmd.PersistentFlags().StringVar(&phpPath,"php", "", "Path to PHP")
+	rootCmd.PersistentFlags().StringVar(&phpPath, "php", "", "Path to PHP")
 }
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if len(phpPath) > 1 {
-		glog.Info("Using PHP path specified on CLI: ", phpPath)
+		log.Info("Using PHP path specified on CLI: ", phpPath)
 	} else {
 		phpPath, _ = util.DetectPhpPath()
 
 		if len(phpPath) > 1 {
-			glog.Info("Using detected PHP path: ", phpPath)
+			log.Info("Using detected PHP path: ", phpPath)
 		} else {
-			glog.V(1).Info("Failed to detect PHP path, prompting user")
+			log.Info("Failed to detect PHP path, prompting user")
 			fmt.Println("This tool requires PHP to operate correctly. Please enter the path to PHP.")
 			prompt := promptui.Prompt{
 				Label:    "PHP Path",
@@ -77,17 +79,17 @@ func initConfig() {
 			}
 
 			phpPath = result
-			glog.Info("Using PHP path: ", phpPath)
+			log.Info("Using PHP path: ", phpPath)
 		}
 	}
 
 	if len(dpPath) > 1 {
-		glog.Info("Using Deskpro path specified on CLI: ", dpPath)
+		log.Info("Using Deskpro path specified on CLI: ", dpPath)
 	} else {
 		dpPath, _ = util.DetectDeskproPath()
 
 		if len(dpPath) > 1 {
-			glog.Info("Using detected Deskpro path: ", dpPath)
+			log.Info("Using detected Deskpro path: ", dpPath)
 		} else {
 			fmt.Println("This tool uses Deskpro source files. You can run the tool from within the Deskpro directory, or supply a path here.")
 			prompt := promptui.Prompt{
@@ -107,8 +109,17 @@ func initConfig() {
 			}
 
 			dpPath = result
-			glog.Info("Using Deskpro path: ", dpPath)
+			log.Info("Using Deskpro path: ", dpPath)
 		}
+	}
+
+	log.SetLevel(log.TraceLevel)
+
+	file, err := os.OpenFile(path.Join(dpPath, "var", "logs", "dputils.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.SetOutput(file)
+	} else {
+		log.Warning("Failed to open dputils.log file. Log output will be directed to stderr instead.")
 	}
 
 	Config = util.Config{}
