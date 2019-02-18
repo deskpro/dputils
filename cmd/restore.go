@@ -772,7 +772,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 	fmt.Println("\tOK")
 
 	localMysqlPass, _ := destinationMysqlConn.mysqlUrl.User.Password()
-	localMysqlPort := sourceMysqlConn.mysqlUrl.Port()
+	localMysqlPort := destinationMysqlConn.mysqlUrl.Port()
 	if len(localMysqlPort) < 1 {
 		localMysqlPort = "3306"
 	}
@@ -805,7 +805,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 	} else {
 		fmt.Println("Restoring from mysqldump (this may take a while)...")
 
-		remoteMysqlPass, _ := destinationMysqlConn.mysqlUrl.User.Password()
+		remoteMysqlPass, _ := sourceMysqlConn.mysqlUrl.User.Password()
 		remoteMysqlPort := sourceMysqlConn.mysqlUrl.Port()
 		if len(remoteMysqlPort) < 1 {
 			remoteMysqlPort = "3306"
