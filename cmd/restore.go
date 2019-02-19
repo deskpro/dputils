@@ -1129,7 +1129,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 		"-u", destinationMysqlConn.mysqlUrl.User.Username(),
 	}
 	if localMysqlPass != "" {
-		localArgs = append(localArgs, "-p", localMysqlPass)
+		localArgs = append(localArgs, "--password="+localMysqlPass)
 	}
 	archive := detectArchive(dbDumpLocal, tmpdir)
 	if archive {
@@ -1155,7 +1155,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 			localArgs...,
 		).CombinedOutput()
 		if err != nil {
-			fmt.Println(out)
+			fmt.Println(string(out))
 			fmt.Println("Failed to restore mysql dump: ", err)
 			os.Exit(1)
 		}
@@ -1175,7 +1175,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 			"-C",
 		}
 		if remoteMysqlPass != "" {
-			remoteArgs = append(remoteArgs, "-p", remoteMysqlPass)
+			remoteArgs = append(remoteArgs, "--password=remoteMysqlPass")
 		}
 		remoteArgs = append(remoteArgs, strings.TrimLeft(sourceMysqlConn.mysqlUrl.Path, "/"))
 
