@@ -1,7 +1,6 @@
 package util
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -72,20 +71,4 @@ func DetectDeskproPath() (string, error) {
 	}
 
 	return "", errors.New("CWD is not Deskpro")
-}
-
-func ReadDeskproConfigFile(phpPath string, dpPath string) (map[string]string, error) {
-
-	out, err := exec.Command(phpPath, filepath.Join(dpPath, "bin", "util"), "dump_config", "--flat-string").Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var config map[string]string
-	err = json.Unmarshal(out, &config)
-	if err != nil {
-		return nil, err
-	}
-
-	return config, nil
 }
