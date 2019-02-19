@@ -209,7 +209,7 @@ var restoreCmd = &cobra.Command{
 			sourceMysqlConn mysqlConn
 		)
 
-		fullBackup, dbDumpLocal, attachUri  := checkFullBackup(cmd, tmpdir)
+		fullBackup, backupDir  := checkFullBackup(cmd, tmpdir)
 
 		if !fullBackup {
 			// this one needed to insure we have at least 1 default source connection or dump
@@ -218,14 +218,21 @@ var restoreCmd = &cobra.Command{
 		} else {
 			moveAttachments = true
 			attachUri = transformAttachUri(attachUri)
+			dbDumpLocal = getFullBackupDump(backupDir, "database")
 		}
 
 		restoreDatabase(destinationMysqlConn, sourceMysqlConn, dpConfig, dbDumpLocal, tmpdir)
 
-		// now let's check we have additional connections like audit, system or voice
-		restoreDatabaseAdvanced(cmd, dpConfig, "audit")
-		restoreDatabaseAdvanced(cmd, dpConfig, "voice")
-		restoreDatabaseAdvanced(cmd, dpConfig, "system")
+		if !fullBackup {
+			// now let's check we have additional connections like audit, system or voice
+			restoreDatabaseAdvanced(cmd, dpConfig, "audit")
+			restoreDatabaseAdvanced(cmd, dpConfig, "voice")
+			restoreDatabaseAdvanced(cmd, dpConfig, "system")
+		} else {
+			restoreDatabaseAdvancedDump(backupDir, dpConfig, "audit", tmpdir)
+			restoreDatabaseAdvancedDump(backupDir, dpConfig, "voice", tmpdir)
+			restoreDatabaseAdvancedDump(backupDir, dpConfig, "system", tmpdir)
+		}
 
 		restoreAttachments(destinationMysqlConn, attachUri, moveAttachments)
 
@@ -239,7 +246,34 @@ var restoreCmd = &cobra.Command{
 	},
 }
 
-func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string, string) {
+func getFullBackupDump(backupDir string, fileName string) string {
+	files, err := ioutil.ReadDir(backupDir)
+	if err != nil {
+		glog.Warning("Failed to get full backup dump file ", err)
+		fmt.Println("Failed to get full backup dump file")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(files)
+
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), fileName + ".") {
+			dumpPath := filepath.Join(backupDir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
+			err := getter.GetFile(dumpPath, filepath.Join(backupDir, f.Name()))
+			if err != nil {
+				glog.Warning("Failed to get full backup dump file ", err)
+				fmt.Println("Failed to get full backup dump file")
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			return dumpPath
+		}
+	}
+
+	return ""
+}
+
+func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 
 	backupUri, _ := cmd.Flags().GetString("full-backup")
 	if backupUri != "" {
@@ -254,10 +288,11 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string, string) {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		return true, filepath.Join(tmpdir, fakename, "database.sql.zip"), filepath.Join(tmpdir, fakename, "attachments")
+
+		return true, filepath.Join(tmpdir, fakename)
 	}
 
-	return false, "", ""
+	return false, ""
 }
 
 func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
@@ -332,6 +367,28 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAt
 	}
 }
 
+func restoreDatabaseAdvancedDump(backupDir string, dpConfig map[string]string, dbType string, tmpdir string) {
+
+	var prefix string
+	
+	prefix = "database_advanced." + dbType
+
+	fmt.Println("Trying to restore database from advanced dump: " + dbType)
+
+	dbDumpLocal := getFullBackupDump(backupDir, "database_" + dbType)
+
+	destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
+	destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+
+	restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
+
+}
+
 func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbType string) {
 
 	var (
@@ -345,15 +402,15 @@ func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbT
 
 		fmt.Println("Trying to restore database from advanced config: " + dbType)
 
-		auditSourceConnection := validateDeskproSourceDirect(cmd, flag)
-		destinationAuditMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
-		destinationAuditMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+		advancedSourceConnection := validateDeskproSourceDirect(cmd, flag)
+		destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
+		destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		destinationMysqlConn := mysqlConn{destinationAuditMysqlUrl, destinationAuditMysqlConn}
-		restoreDatabase(destinationMysqlConn, auditSourceConnection, dpConfig, "", "")
+		destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+		restoreDatabase(destinationMysqlConn, advancedSourceConnection, dpConfig, "", "")
 	}
 }
 
