@@ -232,7 +232,7 @@ var restoreCmd = &cobra.Command{
 			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
 		} else {
 			moveAttachments = true
-			attachUri = transformAttachUri(attachUri)
+			attachUri = transformAttachUri(filepath.Join(backupDir, "attachments"))
 			dbDumpLocal = getFullBackupDump(backupDir, "database")
 		}
 
@@ -384,7 +384,7 @@ func interactiveGatherOptions(cmd *cobra.Command) {
 		}
 
 		log.Info("backup url: ", backupUrl)
-		// TODO handling of backup archive
+		_ = cmd.Flags().Set("full-backup", backupUrl)
 	}
 
 	if restoreMethod != "backup" {
@@ -617,23 +617,26 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAt
 func restoreDatabaseAdvancedDump(backupDir string, dpConfig map[string]string, dbType string, tmpdir string) {
 
 	var prefix string
-
 	prefix = "database_advanced." + dbType
-
-	fmt.Println("Trying to restore database from advanced dump: " + dbType)
-
 	dbDumpLocal := getFullBackupDump(backupDir, "database_" + dbType)
 
-	destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
-	destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if len(dbDumpLocal) > 1 {
+		fmt.Println("Trying to restore database from advanced dump: " + dbType)
+		destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
+		if destinationAdvancedMysqlUrl.User.Username() == "" {
+			log.Error("No connection config for database: " + dbType)
+			fmt.Println("No connection config for database")
+			os.Exit(1)
+		}
+		destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+
+		restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
 	}
-	destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
-
-	restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
-
 }
 
 func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbType string) {
