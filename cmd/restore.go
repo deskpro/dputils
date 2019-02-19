@@ -264,7 +264,7 @@ var restoreCmd = &cobra.Command{
 func getFullBackupDump(backupDir string, fileName string) string {
 	files, err := ioutil.ReadDir(backupDir)
 	if err != nil {
-		glog.Warning("Failed to get full backup dump file ", err)
+		log.Warning("Failed to get full backup dump file ", err)
 		fmt.Println("Failed to get full backup dump file")
 		fmt.Println(err)
 		os.Exit(1)
@@ -276,7 +276,7 @@ func getFullBackupDump(backupDir string, fileName string) string {
 			dumpPath := filepath.Join(backupDir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
 			err := getter.GetFile(dumpPath, filepath.Join(backupDir, f.Name()))
 			if err != nil {
-				glog.Warning("Failed to get full backup dump file ", err)
+				log.Warning("Failed to get full backup dump file ", err)
 				fmt.Println("Failed to get full backup dump file")
 				fmt.Println(err)
 				os.Exit(1)
@@ -298,7 +298,7 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 		fakename := "backup_archive" + fmt.Sprintf("%d", time.Now().Unix())
 		err := getter.GetAny(filepath.Join(tmpdir, fakename), backupUri)
 		if err != nil {
-			glog.Warning("Failed to get full backup archive ", err)
+			log.Warning("Failed to get full backup archive ", err)
 			fmt.Println("Failed to get full backup archive")
 			fmt.Println(err)
 			os.Exit(1)
@@ -1134,7 +1134,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 		newPath := filepath.Join(tmpdir, "deskpro_database.sql" + fmt.Sprintf("%d", time.Now().Unix()))
 		err := getter.GetFile(newPath, dbDumpLocal)
 		if err != nil {
-			glog.Warning("Failed to unarchive backup file", err)
+			log.Warning("Failed to unarchive backup file", err)
 			fmt.Println("Failed to unarchive backup file")
 			fmt.Println(err)
 			os.Exit(1)
