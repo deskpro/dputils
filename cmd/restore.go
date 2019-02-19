@@ -5,9 +5,9 @@ import (
 	"crypto/md5"
 	"database/sql"
 	"fmt"
-	"github.com/golang/glog"
 	"github.com/hashicorp/go-getter"
 	"github.com/manifoldco/promptui"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"io"
 	"io/ioutil"
@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,15 @@ import urlhelper "github.com/hashicorp/go-getter/helper/url"
 import _ "github.com/go-sql-driver/mysql"
 
 func init() {
+	restoreCmd.Flags().BoolP(
+		"interactive",
+		"i",
+		false,
+		`
+			Interactive mode. You will be prompted to input values.
+		`,
+	)
+
 	restoreCmd.Flags().StringP(
 		"full-backup",
 		"k",
@@ -102,7 +112,7 @@ func init() {
 	)
 
 	restoreCmd.Flags().Bool(
-		"archive",
+		"attachments-archive",
 		false,
 		`
 			Set if you want to extract your attachments from an archive
@@ -189,7 +199,7 @@ var restoreCmd = &cobra.Command{
 		Provides various options for downloading a database dump and file attachments from an existing
 		source, and then imports it into the current server.
 
-		Any option that accepts a remote URI supports the following protocols: http, https, ftp, sftp.
+		Any option that accepts a remote URI supports the following protocols: http, https, s3.
 	`,
 	Run: func(cmd *cobra.Command, args []string) {
 		tmpdir, _ := cmd.Flags().GetString("tmpdir")
@@ -197,7 +207,12 @@ var restoreCmd = &cobra.Command{
 			tmpdir = os.TempDir()
 		}
 
-		glog.V(1).Info("tmpdir: ", tmpdir)
+		log.Info("tmpdir: ", tmpdir)
+
+		isInteractive, _ := cmd.Flags().GetBool("interactive")
+		if isInteractive {
+			interactiveGatherOptions(cmd)
+		}
 
 		dpConfig := Config.ValidateDeskproConfig(cmd)
 		destinationMysqlConn := validateDeskpro("database", dpConfig)
@@ -217,7 +232,7 @@ var restoreCmd = &cobra.Command{
 			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
 		} else {
 			moveAttachments = true
-			attachUri = transformAttachUri(attachUri)
+			attachUri = transformAttachUri(filepath.Join(backupDir, "attachments"))
 			dbDumpLocal = getFullBackupDump(backupDir, "database")
 		}
 
@@ -249,19 +264,18 @@ var restoreCmd = &cobra.Command{
 func getFullBackupDump(backupDir string, fileName string) string {
 	files, err := ioutil.ReadDir(backupDir)
 	if err != nil {
-		glog.Warning("Failed to get full backup dump file ", err)
+		log.Warning("Failed to get full backup dump file ", err)
 		fmt.Println("Failed to get full backup dump file")
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	fmt.Println(files)
 
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), fileName + ".") {
 			dumpPath := filepath.Join(backupDir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
 			err := getter.GetFile(dumpPath, filepath.Join(backupDir, f.Name()))
 			if err != nil {
-				glog.Warning("Failed to get full backup dump file ", err)
+				log.Warning("Failed to get full backup dump file ", err)
 				fmt.Println("Failed to get full backup dump file")
 				fmt.Println(err)
 				os.Exit(1)
@@ -283,7 +297,7 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 		fakename := "backup_archive" + fmt.Sprintf("%d", time.Now().Unix())
 		err := getter.GetAny(filepath.Join(tmpdir, fakename), backupUri)
 		if err != nil {
-			glog.Warning("Failed to get full backup archive ", err)
+			log.Warning("Failed to get full backup archive ", err)
 			fmt.Println("Failed to get full backup archive")
 			fmt.Println(err)
 			os.Exit(1)
@@ -293,6 +307,239 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+type menuitem struct {
+	Id string
+	Name string
+	Help string
+}
+
+func interactiveGatherOptions(cmd *cobra.Command) {
+
+	log.Info("Interactive mode")
+	attachUrl := ""
+	dumpUrl := ""
+	backupUrl := ""
+
+	tpl := &promptui.SelectTemplates{
+		Label:    "{{ . }}?",
+		Active:   "> [x] {{ .Name | cyan }}",
+		Inactive: "  [ ] {{ .Name }}",
+		Selected: "{{ .Name | green }}",
+		Details: "{{ .Help | yellow }}",
+	}
+
+	restoreOptions := []menuitem{
+		{"direct", "Direct connection to remote MySQL server", "This establishes a direct MySQL connection over the network. This requires the remote server to be open to network connections, and accessible from this server."},
+		{"dump", "Path/URL to a MySQL dump file", "Use this option if you have a MySQL dump (generated from the \"mysqldump\" utility)."},
+		{"backup", "Path/URL to a complete backup (ZIP containing both a MySQL dump and attachments)", "Use this option if you have made a complete backup using the \"dputils backup\" utility on your other server."},
+	}
+
+	restoreMethodIdx, _, err := (&promptui.Select {
+		Label: "Restore Method",
+		Items: restoreOptions,
+		Templates: tpl,
+	}).Run()
+
+	if err != nil {
+		log.Error("restore method prompt failed: ", err)
+		fmt.Printf("Invalid input: %v\n", err)
+		os.Exit(1)
+	}
+
+	restoreMethod := restoreOptions[restoreMethodIdx].Id
+
+	log.Info("restoreMethod: ", restoreMethod)
+
+	switch restoreMethod {
+	case "direct":
+		mysqlUri, err := interactivePromptMysqlUri()
+		if err != nil {
+			os.Exit(1)
+		}
+		_ = cmd.Flags().Set("mysql-direct", mysqlUri)
+
+	case "dump":
+		dumpUrl, err = (&promptui.Prompt{
+			Label: "Path or URL to dump",
+		}).Run()
+
+		if err != nil {
+			fmt.Printf("Invalid input: %v\n", err)
+			os.Exit(1)
+		}
+
+		log.Info("dump url: ", dumpUrl)
+		_ = cmd.Flags().Set("mysql-dump", dumpUrl)
+
+	case "backup":
+		backupUrl, err = (&promptui.Prompt{
+			Label: "Path or URL to backup archive",
+		}).Run()
+
+		if err != nil {
+			fmt.Printf("Invalid input: %v\n", err)
+			os.Exit(1)
+		}
+
+		log.Info("backup url: ", backupUrl)
+		_ = cmd.Flags().Set("full-backup", backupUrl)
+	}
+
+	if restoreMethod != "backup" {
+		attachOptions := []menuitem{
+			{"archive", "Path/URL to an archive containing attachments", "Use this option if you have archived the entire attachments/ directory. E.g. attachments.zip."},
+			{"attachments", "Base Path/URL to attachments that can directly accessed", "Use this option if you have uploaded attachments somewhere where they can be downloaded one-by-one. For example, if you copied your attachments/ directory directly to this server, then you could enter the path here."},
+			{"skip", "Skip restoring attachments", "This will completely skip the attachments copying step. If there are attachments that exist in the filesystem then they will fail to load on your restored instance."},
+		}
+
+		attachMethodIdx, _, err := (&promptui.Select {
+			Label: "Restore Method",
+			Items: attachOptions,
+			Templates: tpl,
+		}).Run()
+
+		if err != nil {
+			log.Error("attach method prompt failed: ", err)
+			fmt.Printf("Invalid input: %v\n", err)
+			return
+		}
+
+		attachMethod := attachOptions[attachMethodIdx].Id
+
+		log.Info("attachMethod: ", attachMethod)
+
+		switch attachMethod {
+		case "archive":
+			attachUrl, err = (&promptui.Prompt{
+				Label: "Path or URL to archive",
+			}).Run()
+
+			if err != nil {
+				fmt.Printf("Invalid input: %v\n", err)
+				os.Exit(1)
+			}
+
+			log.Info("attachments-archive url: ", attachUrl)
+			_ = cmd.Flags().Set("attachments-archive", attachUrl)
+
+		case "attachments":
+			attachUrl, err = (&promptui.Prompt{
+				Label: "Path or URL to attachments",
+			}).Run()
+
+			if err != nil {
+				fmt.Printf("Invalid input: %v\n", err)
+				os.Exit(1)
+			}
+
+			log.Info("attachments url: ", attachUrl)
+			_ = cmd.Flags().Set("attachments", attachUrl)
+
+		case "skip":
+			log.Info("attachments url: none")
+			_ = cmd.Flags().Set("attachments", "none")
+		}
+	}
+}
+
+func interactivePromptMysqlUri() (string, error) {
+	log.Info("interactivePromptMysqlUri")
+
+	host, err := (&promptui.Prompt{
+		Label: "MySQL Host",
+	}).Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	log.Info("interactivePromptMysqlUri Host: ", host)
+
+
+	portStr, err := (&promptui.Prompt{
+		Label: "MySQL Port",
+		Default: "3306",
+		Validate: func(s string) error {
+			_, err = strconv.Atoi(s)
+			return err
+		},
+	}).Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	port, _ := strconv.Atoi(portStr)
+
+	log.Info("interactivePromptMysqlUri Port: ", port)
+
+	user, err := (&promptui.Prompt{
+		Label: "MySQL User",
+		Default: "deskpro",
+	}).Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	log.Info("interactivePromptMysqlUri User: ", user)
+
+	password, err := (&promptui.Prompt{
+		Label: "MySQL Password",
+		Mask: '*',
+	}).Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	log.Info("interactivePromptMysqlUri Password provided")
+
+	dbname, err := (&promptui.Prompt{
+		Label: "MySQL DB Name",
+	}).Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	log.Info("interactivePromptMysqlUri DB Name: ", dbname)
+
+	mysqlUriLog := fmt.Sprintf(
+		"%s:%s@%s:%d/%s",
+		user,
+		"***",
+		host,
+		port,
+		dbname,
+	)
+
+	mysqlUri := fmt.Sprintf(
+		"%s:%s@%s:%d/%s",
+		user,
+		url.QueryEscape(password),
+		host,
+		port,
+		dbname,
+	)
+
+	log.Error("interactivePromptMysqlUri MySQL URI: ", mysqlUriLog)
+	fmt.Println("Testing connection...")
+
+	mysqlUrl := getMysqlUrlFromUriString(mysqlUri)
+	conn, err := getMysqlConnection(mysqlUrl)
+
+	if err != nil {
+		log.Error("interactivePromptMysqlUri DB conn failed: ", err)
+		fmt.Println("Failed to connect to remote database: ", err)
+		return "", err
+	}
+	fmt.Println("\tOK")
+	_ = conn.Close()
+
+	return mysqlUri, nil
 }
 
 func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
@@ -370,23 +617,26 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAt
 func restoreDatabaseAdvancedDump(backupDir string, dpConfig map[string]string, dbType string, tmpdir string) {
 
 	var prefix string
-	
 	prefix = "database_advanced." + dbType
-
-	fmt.Println("Trying to restore database from advanced dump: " + dbType)
-
 	dbDumpLocal := getFullBackupDump(backupDir, "database_" + dbType)
 
-	destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
-	destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if len(dbDumpLocal) > 1 {
+		fmt.Println("Trying to restore database from advanced dump: " + dbType)
+		destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
+		if destinationAdvancedMysqlUrl.User.Username() == "" {
+			log.Error("No connection config for database: " + dbType)
+			fmt.Println("No connection config for database")
+			os.Exit(1)
+		}
+		destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+
+		restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
 	}
-	destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
-
-	restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
-
 }
 
 func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbType string) {
@@ -550,7 +800,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 	localDbUrl = getMysqlUrlFromConfig(dpConfig, prefix)
 	localDbConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
 	if err != nil {
-		glog.Error("Failed to connect to db ", err)
+		log.Error("Failed to connect to db ", err)
 		fmt.Println("The database details contained in config.database.php do not work. This is the error:")
 		fmt.Println(err)
 		fmt.Println("Please correct the database configuration and then try again.")
@@ -561,7 +811,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 
 	res, err := localDbConn.Query("SHOW TABLES")
 	if err != nil {
-		glog.Warning("Failed to SHOW TABLES on local db ", err)
+		log.Warning("Failed to SHOW TABLES on local db ", err)
 		fmt.Println("The database details contained in config.database.php do not work. This is the error:")
 		fmt.Println(err)
 		fmt.Println("Please correct the database configuration and then try again.")
@@ -569,7 +819,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 	}
 
 	if res.Next() {
-		glog.Info("local db has tables")
+		log.Info("local db has tables")
 
 		// this checks for a count of settings matches the settings that get set upon install
 		// if these arent there, then we can assume its a new instance that hasnt even been configured yet
@@ -577,7 +827,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 		settingCount := 0
 
 		if err != nil {
-			glog.Warning("scanning for settings failed ", err)
+			log.Warning("scanning for settings failed ", err)
 			// an error (i.e. maybe tbale didnt exist) lets just use same handling as if its an install
 			settingCount = 3
 		} else {
@@ -587,7 +837,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 		}
 
 		if settingCount == 3 {
-			glog.Info("found some records that indicate real install")
+			log.Info("found some records that indicate real install")
 			fmt.Println("The local db already contains tables. If this is a new server, then it might simply be the default demo installation.")
 			fmt.Println("You can wipe the installation with the following command: ")
 			fmt.Println("")
@@ -621,7 +871,7 @@ func validateDeskproSource(cmd *cobra.Command, tmpdir string) (string, mysqlConn
 	} else if cmd.Flags().Changed("mysql-dump") {
 		dbDumpLocal = validateDeskproSourceDump(cmd, tmpdir)
 	} else {
-		glog.Info("no --mysql-direct or --mysql-dump specified")
+		log.Info("no --mysql-direct or --mysql-dump specified")
 		fmt.Println("We need a way to get the database. You can use either --mysql-direct or --mysql-dump. Check --help for more information.")
 		os.Exit(1)
 	}
@@ -646,18 +896,18 @@ func validateDeskproSourceDump(cmd *cobra.Command, tmpdir string) (string) {
 	var dbDumpLocal string
 
 	dumpUri, _ := cmd.Flags().GetString("mysql-dump")
-	glog.Info("--mysql-dump = ", dumpUri)
+	log.Info("--mysql-dump = ", dumpUri)
 
 	fmt.Println("Using database dump from: ", dumpUri)
 
 	dbDumpLocal = filepath.Join(tmpdir, "db.sql")
-	glog.Info("save to", dbDumpLocal)
+	log.Info("save to", dbDumpLocal)
 
 	fmt.Println("Downloading to temp file: ", dbDumpLocal)
 
 	err := getter.GetFile(dbDumpLocal, dumpUri)
 	if err != nil {
-		glog.Warning("download dump failed: ", err)
+		log.Warning("download dump failed: ", err)
 		fmt.Println("Failed to download database dump: ", err)
 		os.Exit(1)
 	}
@@ -674,7 +924,7 @@ func doValidateDeskproSource(cmd *cobra.Command, flag string) (url.URL, *sql.DB)
 
 	mysqlUri, _ := cmd.Flags().GetString(flag)
 
-	glog.Info("--mysq-client = ", mysqlUri)
+	log.Info("--mysq-client = ", mysqlUri)
 
 	fmt.Println("Using direct MySQL connection to: ", mysqlUri)
 	fmt.Println("Testing connection...")
@@ -704,14 +954,14 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 	attachUri, _ := cmd.Flags().GetString("attachments")
 	if len(attachUri) < 1 {
-		glog.Info("no --attachments specified")
+		log.Info("no --attachments specified")
 		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
 		os.Exit(1)
 	}
 
 	aUrl, err := url.Parse(attachUri)
 	if err != nil {
-		glog.Info("--attachments contains wrong URI")
+		log.Info("--attachments contains wrong URI")
 		fmt.Println("You must specify a correct path for attachments with --attachments. See --help for more information.")
 		os.Exit(1)
 	}
@@ -721,7 +971,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		moveAttachments, _ = cmd.Flags().GetBool("move-attachments")
 	}
 
-	archive, _ := cmd.Flags().GetBool("archive")
+	archive, _ := cmd.Flags().GetBool("attachments-archive")
 
 	if !archive {
 		// try to detect archive from attachUri
@@ -733,7 +983,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		fakename := "attachments" + fmt.Sprintf("%d", time.Now().Unix())
 		err := getter.GetAny(filepath.Join(tmpdir, fakename), attachUri)
 		if err != nil {
-			glog.Info("failed to load attachments archive: ", err)
+			log.Info("failed to load attachments archive: ", err)
 			fmt.Println("Trying to download attachments archive failed: ", err)
 			os.Exit(1)
 		}
@@ -745,7 +995,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 	if attachUri != "none" {
 		attachUri = transformAttachUri(attachUri)
-		glog.Info("--attachments is ", attachUri)
+		log.Info("--attachments is ", attachUri)
 	} else {
 		fmt.Println("none -- skipping attachments")
 	}
@@ -754,7 +1004,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	if conn != nil && attachUri != "none" {
 		res, err := conn.Query("SELECT save_path FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1")
 		if err != nil {
-			glog.Info("failed blob select: ", err)
+			log.Info("failed blob select: ", err)
 			fmt.Println("Trying to select an attachment record from the database failed: ", err)
 			os.Exit(1)
 		}
@@ -763,7 +1013,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 		if res.Next() {
 			if err := res.Scan(&savePath); err != nil {
-				glog.Info("failed blob scan: ", err)
+				log.Info("failed blob scan: ", err)
 				fmt.Println("Trying to select an attachment record from the database failed: ", err)
 				os.Exit(1)
 			}
@@ -773,7 +1023,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 		// if there are no fs blobs, then there are no attachments
 		if len(savePath) < 1 {
-			glog.Info("no fs blobs, attachUri = none")
+			log.Info("no fs blobs, attachUri = none")
 			fmt.Println("We detected no filesystem attachments in the database, so there are no attachments to copy over.")
 			fmt.Println("You can use --attachments=none to skip this step in future.")
 			attachUri = "none"
@@ -787,7 +1037,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 			err := getter.GetFile(tmpFile, expectFile)
 			if err != nil {
-				glog.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
+				log.Info("Failed to download test file: ", err, ". Expected: ", expectFile)
 				fmt.Println("Failed to download test file: ", err, ". Expected: ", expectFile)
 				os.Exit(1)
 			}
@@ -886,7 +1136,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 		newPath := filepath.Join(tmpdir, "deskpro_database.sql" + fmt.Sprintf("%d", time.Now().Unix()))
 		err := getter.GetFile(newPath, dbDumpLocal)
 		if err != nil {
-			glog.Warning("Failed to unarchive backup file", err)
+			log.Warning("Failed to unarchive backup file", err)
 			fmt.Println("Failed to unarchive backup file")
 			fmt.Println(err)
 			os.Exit(1)
@@ -897,7 +1147,7 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 
 	if len(dbDumpLocal) > 1 {
 		fmt.Println("Restoring from database dump (this may take a while)...")
-		
+
 		localArgs = append(localArgs, "-e", "source " + dbDumpLocal)
 
 		out, err := exec.Command(
