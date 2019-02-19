@@ -38,7 +38,7 @@ func (config *Config) GetDeskproConfig() (map[string]string, error) {
 
 	var err error
 	if config.config == nil {
-		out, err := exec.Command(config.phpPath, filepath.Join(config.dpPath, "bin", "util"), "dump_config", "--flat-string").Output()
+		out, err := exec.Command(config.phpPath, filepath.Join(config.dpPath, "bin", "console"), "dump_config", "--flat-string").Output()
 		if err != nil {
 			return nil, err
 		}
