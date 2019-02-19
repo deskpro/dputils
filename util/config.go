@@ -12,7 +12,6 @@ import (
 
 type Config struct {
 	phpPath string
-	cfgFile string
 	dpPath  string
 	config  map[string]string
 }
@@ -21,21 +20,12 @@ func (config *Config) PhpPath() string {
 	return config.phpPath
 }
 
-func (config *Config) CfgFile() string {
-	return config.cfgFile
-}
-
 func (config *Config) DpPath() string {
 	return config.dpPath
 }
 
 func (config *Config) SetPhpPath(phpPath string) *Config {
 	config.phpPath = phpPath
-	return config
-}
-
-func (config *Config) SetCfgFile(cfgFile string) *Config  {
-	config.cfgFile = cfgFile
 	return config
 }
 

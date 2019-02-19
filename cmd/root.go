@@ -41,7 +41,6 @@ func init() {
 	log.SetLevel(log.ErrorLevel)
 
 	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.dputils.yaml)")
 	rootCmd.PersistentFlags().StringVar(&dpPath, "deskpro", "", "Path to Deskpro on the current server")
 	rootCmd.PersistentFlags().StringVar(&phpPath, "php", "", "Path to PHP")
 }
@@ -123,5 +122,5 @@ func initConfig() {
 	}
 
 	Config = util.Config{}
-	Config.SetPhpPath(phpPath).SetCfgFile(cfgFile).SetDpPath(dpPath)
+	Config.SetPhpPath(phpPath).SetDpPath(dpPath)
 }
