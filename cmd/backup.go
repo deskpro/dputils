@@ -30,9 +30,19 @@ func init() {
                 you can use to expose the download to the internet. This
                 can be useful if you want an wasy way to get this backup to
                 another person or server. Just remember to delete the file
-                after it's been deleted!
+                after it's been downloaded!
 
   				Provide "database" or "attachments" to backup just that thing. If not specified, both are backed up.
+		`,
+	)
+
+	backupCmd.Flags().StringP(
+		"backup",
+		"b",
+		"",
+		`
+				Provide "database" or "attachments" to backup just
+                that thing. If not specified, both are backed up.
 		`,
 	)
 
@@ -69,6 +79,12 @@ var backupCmd = &cobra.Command{
 
 		}
 
+		what, _ := cmd.Flags().GetString("backup")
+		if what != "attachments" && what != "database" && what != "" {
+			fmt.Println("Wrong --backup options, you may specify either \"attachments\" or \"database\" or omit the option to backup both")
+			os.Exit(1)
+		}
+
 		fmt.Println("Backing up to " + targetName)
 
 		zipFile, err := os.Create(targetName)
@@ -79,11 +95,17 @@ var backupCmd = &cobra.Command{
 		defer zipFile.Close()
 		zipFileWriter := zip.NewWriter(zipFile)
 		defer zipFileWriter.Close()
-		addDumpToTheZipFile(dpConfig, "", zipFileWriter)
-		addDumpToTheZipFile(dpConfig, "audit", zipFileWriter)
-		addDumpToTheZipFile(dpConfig, "voice", zipFileWriter)
-		addDumpToTheZipFile(dpConfig, "system", zipFileWriter)
-		addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter)
+		if what == "database" || what == "" {
+			addDumpToTheZipFile(dpConfig, "", zipFileWriter)
+			addDumpToTheZipFile(dpConfig, "audit", zipFileWriter)
+			addDumpToTheZipFile(dpConfig, "voice", zipFileWriter)
+			addDumpToTheZipFile(dpConfig, "system", zipFileWriter)
+		}
+		if what == "attachments" || what == "" {
+			addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter)
+		}
+
+
 
 		if target == "public" {
 			targetName = "http://your-deskpro-url/assets/" + fileName
