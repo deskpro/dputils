@@ -96,6 +96,7 @@ func addDumpToZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Wr
 		databaseMysqlPort = "3306"
 	}
 	remoteArgs := []string{
+		"--opt -Q --hex-blob --lock-tables=false --single-transaction",
 		"-h", databaseUrl.Host,
 		"--port", databaseMysqlPort,
 		"-u", databaseUrl.User.Username(),
