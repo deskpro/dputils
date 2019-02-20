@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"github.com/deskpro/dputils/util"
 	"github.com/spf13/cobra"
+	"gopkg.in/cheggaaa/pb.v2"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,34 +54,106 @@ var backupCmd = &cobra.Command{
 		var targetName string
 
 		target, _ := cmd.Flags().GetString("target")
-
+		target, _ = filepath.Abs(target)
+		fileName := "deskpro-backup." + time.Now().Format("2006-01-02_15:04:05") + ".zip"
 		if target == "public" {
-			targetName = filepath.Join(Config.DpPath(), "www", "assets", "deskpro_backup" + time.Now().Format("Y_m_d_h_i_s") + ".zip")
+			targetName = filepath.Join(Config.DpPath(), "www", "assets", fileName)
 		} else {
 			targetName = target
+			if info, err := os.Stat(target); info.IsDir() {
+				targetName = filepath.Join(targetName, fileName)
+			} else if err != nil {
+				fmt.Println("Can't find target path, please check your --target option carefully")
+				fmt.Println(err)
+			}
+
 		}
 
-		newZipFile, err := os.Create(targetName)
+		fmt.Println("Backing up to " + targetName)
 
+		zipFile, err := os.Create(targetName)
 		if err != nil {
 			fmt.Println("Could not create backup archive:")
 			fmt.Println(err)
 		}
-
-		defer newZipFile.Close()
-		zipFile := zip.NewWriter(newZipFile)
 		defer zipFile.Close()
-		addDumpToZipFile(dpConfig, "", zipFile)
-		addDumpToZipFile(dpConfig, "audit", zipFile)
-		addDumpToZipFile(dpConfig, "voice", zipFile)
-		addDumpToZipFile(dpConfig, "system", zipFile)
-		if len(dpConfig) > 0 {
-			fmt.Println(targetName)
+		zipFileWriter := zip.NewWriter(zipFile)
+		defer zipFileWriter.Close()
+		addDumpToTheZipFile(dpConfig, "", zipFileWriter)
+		addDumpToTheZipFile(dpConfig, "audit", zipFileWriter)
+		addDumpToTheZipFile(dpConfig, "voice", zipFileWriter)
+		addDumpToTheZipFile(dpConfig, "system", zipFileWriter)
+		addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter)
+
+		if target == "public" {
+			targetName = "http://your-deskpro-url/assets/" + fileName
 		}
+
+		fmt.Println("Your backup is available at " + targetName)
 	},
 }
 
-func addDumpToZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Writer) {
+func addAttachmentsToTheZipFile(dpConfig map[string]string, dpPath string, zipFile *zip.Writer) {
+	fmt.Println("Writing attachments")
+	var attachUri string
+	if val, ok := dpConfig["paths.dp_paths.attachments"]; ok {
+		attachUri = val
+	} else {
+		attachUri = filepath.Join(dpPath, "attachments")
+	}
+
+	addFilesToTheZip(zipFile, attachUri, "attachments")
+	fmt.Println("\t Done writing attachments")
+}
+
+func addFilesToTheZip(zipFile *zip.Writer, uri string, zipPath string) {
+	files, err := ioutil.ReadDir(uri)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	var size int64
+	bar := pb.ProgressBarTemplate(`{{ blue "Processing: ` + uri + `" }} {{bar . | green}} {{speed . | blue }}`).Start(len(files))
+	for _, file := range files {
+		// we don't want to backup import temporary files
+		if file.Name() == "import" {
+			bar.Increment()
+			continue
+		}
+		if !file.IsDir() {
+			size += file.Size()
+			dat, err := ioutil.ReadFile(filepath.Join(uri, file.Name()))
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			f, err := zipFile.Create(filepath.Join(zipPath, file.Name()))
+			if err != nil {
+				fmt.Println(err)
+			}
+			_, err = f.Write(dat)
+			if err != nil {
+				fmt.Println(err)
+			}
+			if size > 10 * 1024 * 1024 {
+				if err := zipFile.Flush(); err != nil {
+					fmt.Println("Can't flush data")
+					os.Exit(1)
+				}
+				size = 0
+			}
+			bar.Increment()
+		} else if file.IsDir() {
+			newBase := filepath.Join(uri, file.Name(), "")
+			bar.Increment()
+			addFilesToTheZip(zipFile, newBase, filepath.Join(zipPath, file.Name(), ""))
+		}
+	}
+	bar.Finish()
+}
+
+func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Writer) {
+
 	var prefix string
 	if dbType == "" {
 		prefix = "database"
@@ -90,13 +164,19 @@ func addDumpToZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Wr
 	if databaseUrl.User.Username() == "" {
 		return
 	}
+
+	dbName := "database"
+	if dbType != "" {
+		dbName += "_" + dbType
+	}
+
+	fmt.Println("Dumping " + dbName)
 	databaseMysqlPass, _ := databaseUrl.User.Password()
 	databaseMysqlPort := databaseUrl.Port()
 	if len(databaseMysqlPort) < 1 {
 		databaseMysqlPort = "3306"
 	}
 	remoteArgs := []string{
-		"--opt -Q --hex-blob --lock-tables=false --single-transaction",
 		"-h", databaseUrl.Host,
 		"--port", databaseMysqlPort,
 		"-u", databaseUrl.User.Username(),
@@ -128,4 +208,5 @@ func addDumpToZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Wr
 		fmt.Println("Failed to write a dump file to zip archive")
 		fmt.Println(err)
 	}
+	fmt.Println("\tDone writing the " + dbName +" dump file to zip archive")
 }
