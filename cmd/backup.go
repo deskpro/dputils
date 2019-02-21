@@ -70,7 +70,13 @@ var backupCmd = &cobra.Command{
 			targetName = filepath.Join(Config.DpPath(), "www", "assets", fileName)
 		} else {
 			targetName = target
-			if info, err := os.Stat(target); info.IsDir() {
+			info, err := os.Stat(target)
+			ext := filepath.Ext(target)
+			if err != nil && os.IsNotExist(err) && ext == "" {
+				fmt.Println("Can't find specified dir")
+			} else if err != nil && os.IsNotExist(err) && ext != "" {
+				targetName = target
+			} else if info.IsDir() {
 				targetName = filepath.Join(targetName, fileName)
 			} else if err != nil {
 				fmt.Println("Can't find target path, please check your --target option carefully")
