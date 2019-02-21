@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"github.com/deskpro/dputils/util"
 	"github.com/spf13/cobra"
@@ -223,7 +224,10 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		remoteArgs...
 	)
 
+	var dumpBuff bytes.Buffer
+
 	dumpCmd.Stdout = writer
+	dumpCmd.Stderr = &dumpBuff
 	zipWriter, _ := zipFile.Create(prefix + ".sql")
 	go func() {
 		defer reader.Close()
@@ -235,6 +239,8 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 	if err := dumpCmd.Run(); err != nil {
 		fmt.Println("Failed to write a dump file to zip archive")
 		fmt.Println(err)
+		fmt.Println("Error output for dump command: ")
+		fmt.Println(dumpBuff.String())
 	}
 	fmt.Println("\tDone writing the " + dbName +" dump file to zip archive")
 }

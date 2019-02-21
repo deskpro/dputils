@@ -1251,12 +1251,17 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 			localArgs...
 		)
 
-		dumpCmd.Stdout = writer
-		importCmd.Stdin = reader
+		var (
+			importBuff bytes.Buffer
+			dumpBuff bytes.Buffer
+		)
 
-		var buff bytes.Buffer
-		importCmd.Stdout = &buff
-		importCmd.Stderr = &buff
+		dumpCmd.Stdout = writer
+		dumpCmd.Stderr = &dumpBuff
+
+		importCmd.Stdin = reader
+		importCmd.Stdout = &importBuff
+		importCmd.Stderr = &importBuff
 
 		_ = dumpCmd.Start()
 		_ = importCmd.Start()
@@ -1266,8 +1271,11 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 		err = importCmd.Wait()
 
 		if err != nil {
-			fmt.Println(buff.String())
 			fmt.Println("Failed to restore mysql dump: ", err)
+			fmt.Println("Import command error output: ")
+			fmt.Println(importBuff.String())
+			fmt.Println("Dump command error output: ")
+			fmt.Println(dumpBuff.String())
 			os.Exit(1)
 		}
 	}
