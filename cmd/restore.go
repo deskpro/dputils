@@ -290,8 +290,17 @@ func getFullBackupDump(backupDir string, fileName string) string {
 
 func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 
-	backupUri, _ := cmd.Flags().GetString("full-backup")
+	var (
+		backupUri string
+		err error
+	)
+	backupUri, _ = cmd.Flags().GetString("full-backup")
 	if backupUri != "" {
+		if backupUri, err = filepath.Abs(backupUri); err != nil {
+			log.Error("Can't find a full path to dump", backupUri)
+			fmt.Println("Backup path is wrong, please check the path for the backup archive carefully")
+			fmt.Println(err)
+		}
 		fmt.Println("==========================================================================================")
 		fmt.Println("Detected a full backup flag. Restoring from the full backup archive")
 		fmt.Println("==========================================================================================")
@@ -551,14 +560,14 @@ func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, m
 		fmt.Println("Restore Attachments")
 		fmt.Println("==========================================================================================")
 
-		lastId := getLastBlobId(destinationMysqlConn.MysqlUrl)
-
 		var (
 			err error
 			nextStartId int64 = 1
 			batch []blobrec
 			wg = new(sync.WaitGroup)
 		)
+
+		lastId := getLastBlobId(destinationMysqlConn.MysqlUrl)
 
 		for nextStartId < lastId {
 
@@ -894,9 +903,20 @@ func validateDeskproSourceDirect(cmd *cobra.Command, flag string) util.MysqlConn
 }
 
 func validateDeskproSourceDump(cmd *cobra.Command, tmpdir string) (string) {
-	var dbDumpLocal string
+	var (
+		dbDumpLocal string
+		err error
+	)
 
 	dumpUri, _ := cmd.Flags().GetString("mysql-dump")
+
+	if dumpUri, err = filepath.Abs(dumpUri); err != nil {
+		log.Error("Can't find a full path to dump", dumpUri)
+		fmt.Println("Can't find a full path to dump, please check your --mysql-dump option carefully")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
 	log.Info("--mysql-dump = ", dumpUri)
 
 	fmt.Println("Using database dump from: ", dumpUri)
@@ -957,6 +977,15 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	if len(attachUri) < 1 {
 		log.Info("no --attachments specified")
 		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
+		os.Exit(1)
+	}
+
+	var err error
+
+	if attachUri, err = filepath.Abs(attachUri); err != nil {
+		log.Error("Can't find a full path to dump", attachUri)
+		fmt.Println("Can't find a full path to attachments, please check your --attachments option carefully")
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
