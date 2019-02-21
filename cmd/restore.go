@@ -281,6 +281,7 @@ func getFullBackupDump(backupDir string, fileName string) string {
 				fmt.Println(err)
 				os.Exit(1)
 			}
+
 			return dumpPath
 		}
 	}
@@ -926,7 +927,7 @@ func validateDeskproSourceDump(cmd *cobra.Command, tmpdir string) (string) {
 
 	fmt.Println("Downloading to temp file: ", dbDumpLocal)
 
-	err := getter.GetFile(dbDumpLocal, dumpUri)
+	err = getter.GetFile(dbDumpLocal, dumpUri)
 	if err != nil {
 		log.Warning("download dump failed: ", err)
 		fmt.Println("Failed to download database dump: ", err)
@@ -1176,6 +1177,30 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 	localArgs = append(localArgs, strings.TrimLeft(destinationMysqlConn.MysqlUrl.Path, "/"))
 
 	if len(dbDumpLocal) > 1 {
+
+		dumpFile, err := os.Open(dbDumpLocal)
+		defer dumpFile.Close()
+		if err != nil {
+			log.Error("Couldn't open dump file: ", err)
+			fmt.Println("Couldn't open dump file")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		b := make([]byte, 1024*100)
+		_, err = dumpFile.Read(b)
+		if err != nil {
+			log.Error("Couldn't read dump file: ", err)
+			fmt.Println("Couldn't read dump file")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		if !strings.Contains(string(b), "agent_activity") {
+			log.Error("The dump file seems to be broken")
+			fmt.Println("The dump file seems to be broken, we can't find correct SQL dump for Deskpro tables")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
 		fmt.Println("Restoring from database dump (this may take a while)...")
 
 		localArgs = append(localArgs, "-e", "source " + dbDumpLocal)
