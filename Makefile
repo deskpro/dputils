@@ -17,7 +17,7 @@ $(PLATFORMS):
 build_bins: $(PLATFORMS)
 
 build_zip: build_bins
-	zip -9 build/builds.zip build/dputils_*
+	cd build; zip -9 builds.zip dputils_*
 
 clean:
 	rm -rf build/
