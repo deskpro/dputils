@@ -313,6 +313,25 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+		if _, err := os.Stat(filepath.Join(tmpdir, "fakename", "attachments")); os.IsNotExist(err) {
+			log.Error("can't find attachments subdir backup archive", err)
+			fmt.Println("We can't find attachments subdir in your backup archive")
+			os.Exit(1)
+		}
+
+		dumpExists := false
+		files, err := ioutil.ReadDir(filepath.Join(tmpdir, fakename))
+		for _, f := range files {
+			if strings.HasPrefix(f.Name(), "database" + ".") {
+				dumpExists = true
+			}
+		}
+
+		if !dumpExists {
+			log.Error("can't find database dump file in backup archive", err)
+			fmt.Println("We can't find database dump file in your backup archive")
+			os.Exit(1)
+		}
 
 		return true, filepath.Join(tmpdir, fakename)
 	}
