@@ -555,7 +555,6 @@ func interactivePromptMysqlUri() (string, error) {
 
 func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, moveAttachments bool) {
 	realAttachPath := filepath.Join(dpPath, "attachments")
-
 	if attachUri != "none" {
 		fmt.Println("==========================================================================================")
 		fmt.Println("Restore Attachments")
@@ -1024,12 +1023,17 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		moveAttachments = true
 	}
 
+	if _, err := os.Stat(filepath.Join(attachUri, "attachments")); !os.IsNotExist(err) {
+		attachUri = filepath.Join(attachUri, "attachments")
+	}
+
 	if attachUri != "none" {
 		attachUri = transformAttachUri(attachUri)
 		log.Info("--attachments is ", attachUri)
 	} else {
 		fmt.Println("none -- skipping attachments")
 	}
+
 
 	// Verify a file just to validate
 	if conn != nil && attachUri != "none" {
