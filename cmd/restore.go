@@ -313,7 +313,7 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		if _, err := os.Stat(filepath.Join(tmpdir, "fakename", "attachments")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(tmpdir, fakename, "attachments")); os.IsNotExist(err) {
 			log.Error("can't find attachments subdir backup archive", err)
 			fmt.Println("We can't find attachments subdir in your backup archive")
 			os.Exit(1)
