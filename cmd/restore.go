@@ -999,7 +999,14 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		os.Exit(1)
 	}
 
+
+	if attachUri == "none" {
+		fmt.Println("none -- skipping attachments")
+		return "", false
+	}
+
 	var err error
+
 
 	if attachUri, err = filepath.Abs(attachUri); err != nil {
 		log.Error("Can't find a full path to dump", attachUri)
@@ -1046,13 +1053,8 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		attachUri = filepath.Join(attachUri, "attachments")
 	}
 
-	if attachUri != "none" {
-		attachUri = transformAttachUri(attachUri)
-		log.Info("--attachments is ", attachUri)
-	} else {
-		fmt.Println("none -- skipping attachments")
-	}
-
+	attachUri = transformAttachUri(attachUri)
+	log.Info("--attachments is ", attachUri)
 
 	// Verify a file just to validate
 	if conn != nil && attachUri != "none" {
