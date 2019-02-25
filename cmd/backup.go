@@ -212,7 +212,7 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		"-C",
 	}
 	if databaseMysqlPass != "" {
-		remoteArgs = append(remoteArgs, "--password=remoteMysqlPass")
+		remoteArgs = append(remoteArgs, "--password="+databaseMysqlPass)
 	}
 	remoteArgs = append(remoteArgs, strings.TrimLeft(databaseUrl.Path, "/"))
 
@@ -241,6 +241,7 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		fmt.Println(err)
 		fmt.Println("Error output for dump command: ")
 		fmt.Println(dumpBuff.String())
+		os.Exit(1)
 	}
 	fmt.Println("\tDone writing the " + dbName +" dump file to zip archive")
 }
