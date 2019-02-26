@@ -1,9 +1,15 @@
 language: go
-gobuild_args: -i -ldflags "-s -w" -v
-go:
-  1.11.x
-install:
-  - go get -t -v ./...
-script: go test -test.v ./...
-
-
+before_install:
+  - echo "$PATH"
+  - curl -L https://github.com/upx/upx/releases/download/v3.95/upx-3.95-amd64_linux.tar.xz | sudo tar xJ --strip-components 1 -C /usr/local/bin upx-3.95-amd64_linux/upx
+script: make -j$(nproc)
+deploy:
+  provider: releases
+  api_key:
+    secure: SECURESTRING
+  file_glob: true
+  file: build/dputils*
+  name: "dputils $(date +%Y-%m-%d)"
+  skip_cleanup: true
+  on:
+    all_branches: true
