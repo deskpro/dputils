@@ -263,7 +263,8 @@ var restoreCmd = &cobra.Command{
 }
 
 func getFullBackupDump(backupDir string, fileName string) string {
-	files, err := ioutil.ReadDir(backupDir)
+	dir, _ := filepath.Abs(backupDir)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		log.Warning("Failed to get full backup dump file ", err)
 		fmt.Println("Failed to get full backup dump file")
@@ -273,8 +274,8 @@ func getFullBackupDump(backupDir string, fileName string) string {
 
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), fileName + ".") {
-			dumpPath := filepath.Join(backupDir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
-			err := getter.GetFile(dumpPath, filepath.Join(backupDir, f.Name()))
+			dumpPath := filepath.Join(dir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
+			err := getter.GetFile(dumpPath, filepath.Join(dir, f.Name()))
 			if err != nil {
 				log.Warning("Failed to get full backup dump file ", err)
 				fmt.Println("Failed to get full backup dump file")
