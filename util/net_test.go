@@ -11,7 +11,7 @@ func TestGetMysqlUrlFromUriString(t *testing.T) {
 	expectedUrl := *(&url.URL{
 		Scheme:   "mysql",
 		User:     url.UserPassword("deskpro", "deskpro"),
-		Host:     "localhost",
+		Host:     "localhost:3306",
 		Path:     "/deskpro",
 		RawPath:  "",
 		RawQuery: "",
