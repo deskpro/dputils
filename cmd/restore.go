@@ -250,7 +250,8 @@ var restoreCmd = &cobra.Command{
 			restoreDatabaseAdvancedDump(backupDir, dpConfig, "system", tmpdir)
 		}
 
-		restoreAttachments(destinationMysqlConn, attachUri, moveAttachments)
+		lastId := getLastBlobId(destinationMysqlConn.Conn)
+		restoreAttachments(destinationMysqlConn, attachUri, moveAttachments, lastId)
 
 		doUpgrade(cmd)
 		doElasticReset(cmd, destinationMysqlConn)
@@ -263,7 +264,8 @@ var restoreCmd = &cobra.Command{
 }
 
 func getFullBackupDump(backupDir string, fileName string) string {
-	files, err := ioutil.ReadDir(backupDir)
+	dir, _ := filepath.Abs(backupDir)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		log.Warning("Failed to get full backup dump file ", err)
 		fmt.Println("Failed to get full backup dump file")
@@ -273,8 +275,8 @@ func getFullBackupDump(backupDir string, fileName string) string {
 
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), fileName + ".") {
-			dumpPath := filepath.Join(backupDir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
-			err := getter.GetFile(dumpPath, filepath.Join(backupDir, f.Name()))
+			dumpPath := filepath.Join(dir, "dump" + fmt.Sprintf("%d", time.Now().Unix()) + ".sql")
+			err := getter.GetFile(dumpPath, filepath.Join(dir, f.Name()))
 			if err != nil {
 				log.Warning("Failed to get full backup dump file ", err)
 				fmt.Println("Failed to get full backup dump file")
@@ -572,8 +574,8 @@ func interactivePromptMysqlUri() (string, error) {
 	return mysqlUri, nil
 }
 
-func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, moveAttachments bool) {
-	realAttachPath := filepath.Join(dpPath, "attachments")
+func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, moveAttachments bool, lastId int64) {
+	realAttachPath := filepath.Join(Config.DpPath(), "attachments")
 	if attachUri != "none" {
 		fmt.Println("==========================================================================================")
 		fmt.Println("Restore Attachments")
@@ -585,8 +587,6 @@ func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, m
 			batch []blobrec
 			wg = new(sync.WaitGroup)
 		)
-
-		lastId := getLastBlobId(destinationMysqlConn.MysqlUrl)
 
 		for nextStartId < lastId {
 
@@ -1331,12 +1331,7 @@ func compareFileHash(filePath string, expectHash string) bool {
 	return fmt.Sprintf("%x", md5.Sum(nil)) == expectHash
 }
 
-func getLastBlobId(murl url.URL) int64 {
-	db, err := util.GetMysqlConnection(murl)
-	if err != nil {
-		panic(err)
-	}
-
+func getLastBlobId(db *sql.DB) int64 {
 	res, err := db.Query("SELECT id FROM blobs WHERE storage_loc = 'fs' ORDER BY id DESC LIMIT 1 ")
 
 	if err != nil {
@@ -1360,15 +1355,7 @@ func getLastBlobId(murl url.URL) int64 {
 
 func getNextBlobBatch(db *sql.DB, startId int64) []blobrec {
 
-	res, err := db.Query(`
-		SELECT id, save_path, blob_hash
-		FROM blobs
-		WHERE
-			id > ?
-			AND storage_loc = 'fs'
-		ORDER BY id ASC
-		LIMIT 100
-	`, startId)
+	res, err := db.Query(`SELECT id, save_path, blob_hash FROM blobs WHERE id > ? AND storage_loc = 'fs' ORDER BY id ASC LIMIT 100`, startId)
 
 	defer res.Close()
 
