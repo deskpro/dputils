@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"database/sql"
 	"fmt"
+	"github.com/deskpro/dputils/util"
 	"github.com/hashicorp/go-getter"
 	"github.com/manifoldco/promptui"
 	log "github.com/sirupsen/logrus"
@@ -221,7 +222,7 @@ var restoreCmd = &cobra.Command{
 			moveAttachments bool
 			attachUri string
 			dbDumpLocal string
-			sourceMysqlConn mysqlConn
+			sourceMysqlConn util.MysqlConn
 		)
 
 		fullBackup, backupDir  := checkFullBackup(cmd, tmpdir)
@@ -229,7 +230,7 @@ var restoreCmd = &cobra.Command{
 		if !fullBackup {
 			// this one needed to insure we have at least 1 default source connection or dump
 			dbDumpLocal, sourceMysqlConn = validateDeskproSource(cmd, tmpdir)
-			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.conn, tmpdir)
+			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.Conn, tmpdir)
 		} else {
 			moveAttachments = true
 			attachUri = transformAttachUri(filepath.Join(backupDir, "attachments"))
@@ -280,6 +281,7 @@ func getFullBackupDump(backupDir string, fileName string) string {
 				fmt.Println(err)
 				os.Exit(1)
 			}
+
 			return dumpPath
 		}
 	}
@@ -289,8 +291,17 @@ func getFullBackupDump(backupDir string, fileName string) string {
 
 func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 
-	backupUri, _ := cmd.Flags().GetString("full-backup")
+	var (
+		backupUri string
+		err error
+	)
+	backupUri, _ = cmd.Flags().GetString("full-backup")
 	if backupUri != "" {
+		if backupUri, err = filepath.Abs(backupUri); err != nil {
+			log.Error("Can't find a full path to dump", backupUri)
+			fmt.Println("Backup path is wrong, please check the path for the backup archive carefully")
+			fmt.Println(err)
+		}
 		fmt.Println("==========================================================================================")
 		fmt.Println("Detected a full backup flag. Restoring from the full backup archive")
 		fmt.Println("==========================================================================================")
@@ -300,6 +311,25 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 			log.Warning("Failed to get full backup archive ", err)
 			fmt.Println("Failed to get full backup archive")
 			fmt.Println(err)
+			os.Exit(1)
+		}
+		if _, err := os.Stat(filepath.Join(tmpdir, fakename, "attachments")); os.IsNotExist(err) {
+			log.Error("can't find attachments subdir backup archive", err)
+			fmt.Println("We can't find attachments subdir in your backup archive")
+			os.Exit(1)
+		}
+
+		dumpExists := false
+		files, err := ioutil.ReadDir(filepath.Join(tmpdir, fakename))
+		for _, f := range files {
+			if strings.HasPrefix(f.Name(), "database" + ".") {
+				dumpExists = true
+			}
+		}
+
+		if !dumpExists {
+			log.Error("can't find database dump file in backup archive", err)
+			fmt.Println("We can't find database dump file in your backup archive")
 			os.Exit(1)
 		}
 
@@ -528,8 +558,8 @@ func interactivePromptMysqlUri() (string, error) {
 	log.Error("interactivePromptMysqlUri MySQL URI: ", mysqlUriLog)
 	fmt.Println("Testing connection...")
 
-	mysqlUrl := getMysqlUrlFromUriString(mysqlUri)
-	conn, err := getMysqlConnection(mysqlUrl)
+	mysqlUrl := util.GetMysqlUrlFromUriString(mysqlUri)
+	conn, err := util.GetMysqlConnection(mysqlUrl)
 
 	if err != nil {
 		log.Error("interactivePromptMysqlUri DB conn failed: ", err)
@@ -542,15 +572,12 @@ func interactivePromptMysqlUri() (string, error) {
 	return mysqlUri, nil
 }
 
-func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAttachments bool) {
+func restoreAttachments(destinationMysqlConn util.MysqlConn, attachUri string, moveAttachments bool) {
 	realAttachPath := filepath.Join(dpPath, "attachments")
-
 	if attachUri != "none" {
 		fmt.Println("==========================================================================================")
 		fmt.Println("Restore Attachments")
 		fmt.Println("==========================================================================================")
-
-		lastId := getLastBlobId(destinationMysqlConn.mysqlUrl)
 
 		var (
 			err error
@@ -559,10 +586,12 @@ func restoreAttachments(destinationMysqlConn mysqlConn, attachUri string, moveAt
 			wg = new(sync.WaitGroup)
 		)
 
+		lastId := getLastBlobId(destinationMysqlConn.MysqlUrl)
+
 		for nextStartId < lastId {
 
 			fmt.Println("Batch starting ", nextStartId, "...")
-			batch = getNextBlobBatch(destinationMysqlConn.conn, nextStartId)
+			batch = getNextBlobBatch(destinationMysqlConn.Conn, nextStartId)
 			if batch != nil {
 				b := batch[len(batch)-1]
 				nextStartId = b.id
@@ -622,20 +651,20 @@ func restoreDatabaseAdvancedDump(backupDir string, dpConfig map[string]string, d
 
 	if len(dbDumpLocal) > 1 {
 		fmt.Println("Trying to restore database from advanced dump: " + dbType)
-		destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
+		destinationAdvancedMysqlUrl := util.GetMysqlUrlFromConfig(dpConfig, prefix)
 		if destinationAdvancedMysqlUrl.User.Username() == "" {
 			log.Error("No connection config for database: " + dbType)
 			fmt.Println("No connection config for database")
 			os.Exit(1)
 		}
-		destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+		destinationAdvancedMysqlConn, err := util.GetMysqlConnectionFromConfig(dpConfig, prefix)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+		destinationMysqlConn := util.MysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
 
-		restoreDatabase(destinationMysqlConn, mysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
+		restoreDatabase(destinationMysqlConn, util.MysqlConn{}, dpConfig, dbDumpLocal, tmpdir)
 	}
 }
 
@@ -653,25 +682,25 @@ func restoreDatabaseAdvanced(cmd *cobra.Command, dpConfig map[string]string, dbT
 		fmt.Println("Trying to restore database from advanced config: " + dbType)
 
 		advancedSourceConnection := validateDeskproSourceDirect(cmd, flag)
-		destinationAdvancedMysqlUrl := getMysqlUrlFromConfig(dpConfig, prefix)
-		destinationAdvancedMysqlConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+		destinationAdvancedMysqlUrl := util.GetMysqlUrlFromConfig(dpConfig, prefix)
+		destinationAdvancedMysqlConn, err := util.GetMysqlConnectionFromConfig(dpConfig, prefix)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		destinationMysqlConn := mysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
+		destinationMysqlConn := util.MysqlConn{destinationAdvancedMysqlUrl, destinationAdvancedMysqlConn}
 		restoreDatabase(destinationMysqlConn, advancedSourceConnection, dpConfig, "", "")
 	}
 }
 
-func markAsTestInstance(cmd *cobra.Command, destinationMysqlConn mysqlConn) {
+func markAsTestInstance(cmd *cobra.Command, destinationMysqlConn util.MysqlConn) {
 	asTestInstance, _ := cmd.Flags().GetBool("as-test-instance")
 	if asTestInstance {
 		fmt.Println("==========================================================================================")
 		fmt.Println("Marking your new Deskpro instance as test instance (email accounts)")
 		fmt.Println("==========================================================================================")
 		fmt.Println("Disabling email accounts")
-		_, err := destinationMysqlConn.conn.Exec("UPDATE `email_accounts` SET `is_enabled` = 0")
+		_, err := destinationMysqlConn.Conn.Exec("UPDATE `email_accounts` SET `is_enabled` = 0")
 		if err != nil {
 			fmt.Println("\tFailed to disable accounts")
 		} else {
@@ -722,21 +751,21 @@ func markAsTestInstance(cmd *cobra.Command, destinationMysqlConn mysqlConn) {
 	}
 }
 
-func doElasticReset(cmd *cobra.Command, destinationMysqlConn mysqlConn) {
+func doElasticReset(cmd *cobra.Command, destinationMysqlConn util.MysqlConn) {
 	reindexElastic, _ := cmd.Flags().GetBool("reindex-elastic")
 	if reindexElastic {
 		fmt.Println("==========================================================================================")
 		fmt.Println("Scheduling Elasticsearch indexation")
 		fmt.Println("==========================================================================================")
 		fmt.Println("Setting elastic.requires_reset flag")
-		_, err := destinationMysqlConn.conn.Exec("INSERT INTO `settings` (`name`, `value`) VALUES ('elastica.requires_reset', 1) ON DUPLICATE KEY UPDATE `value` = 1")
+		_, err := destinationMysqlConn.Conn.Exec("INSERT INTO `settings` (`name`, `value`) VALUES ('elastica.requires_reset', 1) ON DUPLICATE KEY UPDATE `value` = 1")
 		if err != nil {
 			fmt.Println("\tFailed to set flag")
 		} else {
 			fmt.Println("\tOK")
 		}
 		fmt.Println("Updating Elastic indexer status")
-		_, err2 := destinationMysqlConn.conn.Exec("DELETE FROM `datastore` WHERE `name` = 'sys.es_indexer'")
+		_, err2 := destinationMysqlConn.Conn.Exec("DELETE FROM `datastore` WHERE `name` = 'sys.es_indexer'")
 		if err2 != nil {
 			fmt.Println("\tFailed to reset indexer status")
 		} else {
@@ -790,15 +819,15 @@ func doUpgrade(cmd *cobra.Command) {
 
 
 
-func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
+func validateDeskpro(prefix string, dpConfig map[string]string) util.MysqlConn {
 	var (
 		localDbConn          *sql.DB
 		localDbUrl           url.URL
-		destinationMysqlConn mysqlConn
+		destinationMysqlConn util.MysqlConn
 	)
 
-	localDbUrl = getMysqlUrlFromConfig(dpConfig, prefix)
-	localDbConn, err := getMysqlConnectionFromConfig(dpConfig, prefix)
+	localDbUrl = util.GetMysqlUrlFromConfig(dpConfig, prefix)
+	localDbConn, err := util.GetMysqlConnectionFromConfig(dpConfig, prefix)
 	if err != nil {
 		log.Error("Failed to connect to db ", err)
 		fmt.Println("The database details contained in config.database.php do not work. This is the error:")
@@ -807,7 +836,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 		os.Exit(1)
 	}
 
-	destinationMysqlConn = mysqlConn{localDbUrl, localDbConn}
+	destinationMysqlConn = util.MysqlConn{localDbUrl, localDbConn}
 
 	res, err := localDbConn.Query("SHOW TABLES")
 	if err != nil {
@@ -851,7 +880,7 @@ func validateDeskpro(prefix string, dpConfig map[string]string) mysqlConn {
 	return destinationMysqlConn
 }
 
-func validateDeskproSource(cmd *cobra.Command, tmpdir string) (string, mysqlConn) {
+func validateDeskproSource(cmd *cobra.Command, tmpdir string) (string, util.MysqlConn) {
 	//------------------------------
 	// Database conn or dump
 	//------------------------------
@@ -864,7 +893,7 @@ func validateDeskproSource(cmd *cobra.Command, tmpdir string) (string, mysqlConn
 
 	var (
 		dbDumpLocal string
-		sourceConn mysqlConn
+		sourceConn util.MysqlConn
 	)
 	if cmd.Flags().Changed("mysql-direct") {
 		sourceConn = validateDeskproSourceDirect(cmd, "mysql-direct")
@@ -881,21 +910,32 @@ func validateDeskproSource(cmd *cobra.Command, tmpdir string) (string, mysqlConn
 
 // validateDeskproDestination checks if destination database is ready to accept database dump which may be either
 // a file or a direct mysql connection to dump all tables with mysqldump
-func validateDeskproSourceDirect(cmd *cobra.Command, flag string) mysqlConn {
+func validateDeskproSourceDirect(cmd *cobra.Command, flag string) util.MysqlConn {
 
 	//var attachLocal string
-	var sourceConn mysqlConn
+	var sourceConn util.MysqlConn
 
 	mysqlUrl, conn := doValidateDeskproSource(cmd, flag)
-	sourceConn = mysqlConn{mysqlUrl, conn}
+	sourceConn = util.MysqlConn{mysqlUrl, conn}
 
 	return sourceConn
 }
 
 func validateDeskproSourceDump(cmd *cobra.Command, tmpdir string) (string) {
-	var dbDumpLocal string
+	var (
+		dbDumpLocal string
+		err error
+	)
 
 	dumpUri, _ := cmd.Flags().GetString("mysql-dump")
+
+	if dumpUri, err = filepath.Abs(dumpUri); err != nil {
+		log.Error("Can't find a full path to dump", dumpUri)
+		fmt.Println("Can't find a full path to dump, please check your --mysql-dump option carefully")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
 	log.Info("--mysql-dump = ", dumpUri)
 
 	fmt.Println("Using database dump from: ", dumpUri)
@@ -905,7 +945,7 @@ func validateDeskproSourceDump(cmd *cobra.Command, tmpdir string) (string) {
 
 	fmt.Println("Downloading to temp file: ", dbDumpLocal)
 
-	err := getter.GetFile(dbDumpLocal, dumpUri)
+	err = getter.GetFile(dbDumpLocal, dumpUri)
 	if err != nil {
 		log.Warning("download dump failed: ", err)
 		fmt.Println("Failed to download database dump: ", err)
@@ -929,8 +969,8 @@ func doValidateDeskproSource(cmd *cobra.Command, flag string) (url.URL, *sql.DB)
 	fmt.Println("Using direct MySQL connection to: ", mysqlUri)
 	fmt.Println("Testing connection...")
 
-	mysqlUrl = getMysqlUrlFromUriString(mysqlUri)
-	conn, err = getMysqlConnection(mysqlUrl)
+	mysqlUrl = util.GetMysqlUrlFromUriString(mysqlUri)
+	conn, err = util.GetMysqlConnection(mysqlUrl)
 
 	if err != nil {
 		fmt.Println("Failed to connect to remote database")
@@ -956,6 +996,22 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	if len(attachUri) < 1 {
 		log.Info("no --attachments specified")
 		fmt.Println("You must specify a path for attachments with --attachments. See --help for more information.")
+		os.Exit(1)
+	}
+
+
+	if attachUri == "none" {
+		fmt.Println("none -- skipping attachments")
+		return "", false
+	}
+
+	var err error
+
+
+	if attachUri, err = filepath.Abs(attachUri); err != nil {
+		log.Error("Can't find a full path to dump", attachUri)
+		fmt.Println("Can't find a full path to attachments, please check your --attachments option carefully")
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -993,12 +1049,12 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		moveAttachments = true
 	}
 
-	if attachUri != "none" {
-		attachUri = transformAttachUri(attachUri)
-		log.Info("--attachments is ", attachUri)
-	} else {
-		fmt.Println("none -- skipping attachments")
+	if _, err := os.Stat(filepath.Join(attachUri, "attachments")); !os.IsNotExist(err) {
+		attachUri = filepath.Join(attachUri, "attachments")
 	}
+
+	attachUri = transformAttachUri(attachUri)
+	log.Info("--attachments is ", attachUri)
 
 	// Verify a file just to validate
 	if conn != nil && attachUri != "none" {
@@ -1092,30 +1148,30 @@ func detectArchive(uri string, tmpdir string) bool{
 
 // restoreDatabse performs actual database restore from remote db to local db
 // returns nothing
-func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, dpConfig map[string]string, dbDumpLocal string, tmpdir string) {
+func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.MysqlConn, dpConfig map[string]string, dbDumpLocal string, tmpdir string) {
 	fmt.Println("==========================================================================================")
 	fmt.Println("Restore Database")
 	fmt.Println("==========================================================================================")
 
 	fmt.Println("Clearing existing database...")
 
-	tableList, _ := destinationMysqlConn.conn.Query("SHOW TABLES")
+	tableList, _ := destinationMysqlConn.Conn.Query("SHOW TABLES")
 
-	_, _ = destinationMysqlConn.conn.Exec("SET FOREIGN_KEY_CHECKS = 0")
+	_, _ = destinationMysqlConn.Conn.Exec("SET FOREIGN_KEY_CHECKS = 0")
 	for tableList.Next() {
 		var tableName string
 		_ = tableList.Scan(tableName)
 
 		if len(tableName) > 0 {
-			_, _ = destinationMysqlConn.conn.Exec("DROP TABLE `" + tableName + "`")
+			_, _ = destinationMysqlConn.Conn.Exec("DROP TABLE `" + tableName + "`")
 		}
 	}
-	_, _ = destinationMysqlConn.conn.Exec("SET FOREIGN_KEY_CHECKS = 1")
+	_, _ = destinationMysqlConn.Conn.Exec("SET FOREIGN_KEY_CHECKS = 1")
 
 	fmt.Println("\tOK")
 
-	localMysqlPass, _ := destinationMysqlConn.mysqlUrl.User.Password()
-	localMysqlPort := destinationMysqlConn.mysqlUrl.Port()
+	localMysqlPass, _ := destinationMysqlConn.MysqlUrl.User.Password()
+	localMysqlPort := destinationMysqlConn.MysqlUrl.Port()
 	if len(localMysqlPort) < 1 {
 		localMysqlPort = "3306"
 	}
@@ -1124,9 +1180,9 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 	mysqlDumpBin := dpConfig["paths.mysqldump_path"]
 
 	localArgs := []string{
-		"-h", destinationMysqlConn.mysqlUrl.Host,
+		"-h", destinationMysqlConn.MysqlUrl.Host,
 		"--port", localMysqlPort,
-		"-u", destinationMysqlConn.mysqlUrl.User.Username(),
+		"-u", destinationMysqlConn.MysqlUrl.User.Username(),
 	}
 	if localMysqlPass != "" {
 		localArgs = append(localArgs, "--password="+localMysqlPass)
@@ -1143,9 +1199,33 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 		}
 		dbDumpLocal = newPath
 	}
-	localArgs = append(localArgs, strings.TrimLeft(destinationMysqlConn.mysqlUrl.Path, "/"))
+	localArgs = append(localArgs, strings.TrimLeft(destinationMysqlConn.MysqlUrl.Path, "/"))
 
 	if len(dbDumpLocal) > 1 {
+
+		dumpFile, err := os.Open(dbDumpLocal)
+		defer dumpFile.Close()
+		if err != nil {
+			log.Error("Couldn't open dump file: ", err)
+			fmt.Println("Couldn't open dump file")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		b := make([]byte, 1024*100)
+		_, err = dumpFile.Read(b)
+		if err != nil {
+			log.Error("Couldn't read dump file: ", err)
+			fmt.Println("Couldn't read dump file")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		if !strings.Contains(string(b), "agent_activity") {
+			log.Error("The dump file seems to be broken")
+			fmt.Println("The dump file seems to be broken, we can't find correct SQL dump for Deskpro tables")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
 		fmt.Println("Restoring from database dump (this may take a while)...")
 
 		localArgs = append(localArgs, "-e", "source " + dbDumpLocal)
@@ -1162,22 +1242,22 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 	} else {
 		fmt.Println("Restoring from mysqldump (this may take a while)...")
 
-		remoteMysqlPass, _ := sourceMysqlConn.mysqlUrl.User.Password()
-		remoteMysqlPort := sourceMysqlConn.mysqlUrl.Port()
+		remoteMysqlPass, _ := sourceMysqlConn.MysqlUrl.User.Password()
+		remoteMysqlPort := sourceMysqlConn.MysqlUrl.Port()
 		if len(remoteMysqlPort) < 1 {
 			remoteMysqlPort = "3306"
 		}
 
 		remoteArgs := []string{
-			"-h", sourceMysqlConn.mysqlUrl.Host,
+			"-h", sourceMysqlConn.MysqlUrl.Host,
 			"--port", remoteMysqlPort,
-			"-u", sourceMysqlConn.mysqlUrl.User.Username(),
+			"-u", sourceMysqlConn.MysqlUrl.User.Username(),
 			"-C",
 		}
 		if remoteMysqlPass != "" {
 			remoteArgs = append(remoteArgs, "--password=remoteMysqlPass")
 		}
-		remoteArgs = append(remoteArgs, strings.TrimLeft(sourceMysqlConn.mysqlUrl.Path, "/"))
+		remoteArgs = append(remoteArgs, strings.TrimLeft(sourceMysqlConn.MysqlUrl.Path, "/"))
 
 		reader, writer, err := os.Pipe()
 		if err != nil {
@@ -1196,12 +1276,17 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 			localArgs...
 		)
 
-		dumpCmd.Stdout = writer
-		importCmd.Stdin = reader
+		var (
+			importBuff bytes.Buffer
+			dumpBuff bytes.Buffer
+		)
 
-		var buff bytes.Buffer
-		importCmd.Stdout = &buff
-		importCmd.Stderr = &buff
+		dumpCmd.Stdout = writer
+		dumpCmd.Stderr = &dumpBuff
+
+		importCmd.Stdin = reader
+		importCmd.Stdout = &importBuff
+		importCmd.Stderr = &importBuff
 
 		_ = dumpCmd.Start()
 		_ = importCmd.Start()
@@ -1211,8 +1296,11 @@ func restoreDatabase(destinationMysqlConn mysqlConn, sourceMysqlConn mysqlConn, 
 		err = importCmd.Wait()
 
 		if err != nil {
-			fmt.Println(buff.String())
 			fmt.Println("Failed to restore mysql dump: ", err)
+			fmt.Println("Import command error output: ")
+			fmt.Println(importBuff.String())
+			fmt.Println("Dump command error output: ")
+			fmt.Println(dumpBuff.String())
 			os.Exit(1)
 		}
 	}
@@ -1226,10 +1314,7 @@ type blobrec struct {
 	hash string
 }
 
-type mysqlConn struct {
-	mysqlUrl url.URL
-	conn     *sql.DB
-}
+
 
 func compareFileHash(filePath string, expectHash string) bool {
 	f, err := os.Open(filePath)
@@ -1247,7 +1332,7 @@ func compareFileHash(filePath string, expectHash string) bool {
 }
 
 func getLastBlobId(murl url.URL) int64 {
-	db, err := getMysqlConnection(murl)
+	db, err := util.GetMysqlConnection(murl)
 	if err != nil {
 		panic(err)
 	}
@@ -1306,80 +1391,4 @@ func getNextBlobBatch(db *sql.DB, startId int64) []blobrec {
 	return recs
 }
 
-func getMysqlUrlFromUriString(uri string) url.URL {
-	murl, err := url.Parse("mysql://" + uri)
 
-	if err != nil {
-		fmt.Println("--mysql-direct: Invalid MySQL URI string")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	if len(murl.User.Username()) < 1 {
-		fmt.Println("--mysql-direct: Username is missing")
-		os.Exit(1)
-	}
-
-	//var pass string
-	pass, _ := murl.User.Password()
-
-	if len(pass) < 1 {
-		prompt := promptui.Prompt{
-			Label: "MySQL Password (just hit enter if empty)",
-			Mask:  '*',
-		}
-
-		pass, err = prompt.Run()
-	}
-
-	return *(&url.URL{
-		Scheme:   "mysql",
-		User:     url.UserPassword(murl.User.Username(), pass),
-		Host:     murl.Host,
-		Path:     murl.Path,
-		RawPath:  murl.RawPath,
-		RawQuery: murl.RawQuery,
-	})
-}
-
-func getMysqlConnection(murl url.URL) (*sql.DB, error) {
-	pass, _ := murl.User.Password()
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)%s", murl.User.Username(), pass, murl.Host, murl.Path)
-
-	db, err := sql.Open(
-		"mysql",
-		dsn,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Query("SELECT 1")
-
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func getMysqlConnectionFromConfig(dpConfig map[string]string, prefix string) (*sql.DB, error) {
-	return getMysqlConnection(getMysqlUrlFromConfig(dpConfig, prefix))
-}
-
-func getMysqlUrlFromConfig(dpConfig map[string]string, prefix string) url.URL {
-	murl, err := url.Parse(
-		"mysql://" + dpConfig[prefix + ".user"] +
-		":" + dpConfig[prefix + ".password"] +
-		"@" + dpConfig[prefix + ".host"] +
-		"/" + dpConfig[prefix + ".dbname"])
-
-	if err != nil {
-		fmt.Println("Database connection in config.database.php is invalid or corrupt")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	return *murl
-}
