@@ -36,7 +36,7 @@ func DetectPhpPath() (string, error) {
 			return path, nil
 		}
 
-		check := "C:\\DeskPRO\\PHP\\php.exe"
+		check := filepath.Join("C:", "DeskPRO", "DeskPRO", "php.exe")
 		if _, err := os.Stat(check); !os.IsNotExist(err) {
 			return check, nil
 		}
@@ -59,12 +59,12 @@ func DetectDeskproPath() (string, error) {
 	}
 
 	if runtime.GOOS == "windows" {
-		winPath := "C:\\DeskPRO\\DeskPRO"
+		winPath := filepath.Join("C:", "DeskPRO", "DeskPRO")
 		if CheckDpDir(winPath) == nil {
 			return winPath, nil
 		}
 	} else {
-		vmPath := "/usr/share/nginx/html/deskpro"
+		vmPath := filepath.Join("usr", "share", "nginx", "html", "deskpro")
 		if CheckDpDir(vmPath) == nil {
 			return vmPath, nil
 		}

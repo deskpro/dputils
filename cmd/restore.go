@@ -1180,7 +1180,7 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 	mysqlDumpBin := dpConfig["paths.mysqldump_path"]
 
 	localArgs := []string{
-		"-h", destinationMysqlConn.MysqlUrl.Host,
+		"-h", destinationMysqlConn.MysqlUrl.Hostname(),
 		"--port", localMysqlPort,
 		"-u", destinationMysqlConn.MysqlUrl.User.Username(),
 	}
@@ -1249,7 +1249,7 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 		}
 
 		remoteArgs := []string{
-			"-h", sourceMysqlConn.MysqlUrl.Host,
+			"-h", sourceMysqlConn.MysqlUrl.Hostname(),
 			"--port", remoteMysqlPort,
 			"-u", sourceMysqlConn.MysqlUrl.User.Username(),
 			"-C",

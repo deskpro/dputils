@@ -40,6 +40,8 @@ func (config *Config) GetDeskproConfig() (map[string]string, error) {
 	if config.config == nil {
 		out, err := exec.Command(config.phpPath, filepath.Join(config.dpPath, "bin", "console"), "dump_config", "--flat-string").Output()
 		if err != nil {
+			glog.Error("Failed to read config ", err)
+			fmt.Println("Command exited with:", out, err)
 			return nil, err
 		}
 
@@ -57,7 +59,6 @@ func  (config *Config) ValidateDeskproConfig(cmd *cobra.Command) map[string]stri
 	dpConfig, err := config.GetDeskproConfig()
 
 	if err != nil {
-		glog.Error("Failed to read config ", err)
 		fmt.Println("We failed to read the Deskpro config files. Are they there?")
 		fmt.Println("To start fresh, you can install clean config files with this command:")
 		fmt.Println("")
