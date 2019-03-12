@@ -65,8 +65,12 @@ var backupCmd = &cobra.Command{
 		var targetName string
 
 		target, _ := cmd.Flags().GetString("target")
+		if target == "" {
+			fmt.Println("You must specify a target to create a backup archive")
+			os.Exit(1)
+		}
 		target, _ = filepath.Abs(target)
-		fileName := "deskpro-backup." + time.Now().Format("2006-01-02_15:04:05") + ".zip"
+		fileName := "deskpro-backup." + time.Now().Format("2006-01-02_15-04-05") + ".zip"
 		if target == "public" {
 			targetName = filepath.Join(Config.DpPath(), "www", "assets", fileName)
 		} else {
