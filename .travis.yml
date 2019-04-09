@@ -7,7 +7,7 @@ script:
 deploy:
   provider: releases
   api_key:
-    secure: SECURESTRING
+    secure: "Gc6NKyHEG7hXeP8hvoSPHLJA4Vg4bz9NyYP2q1bYBs2kyxzXgs+NAZTWSNPDIy9jXs+l84dyXIwCGFxphyJT+zExxluj0DrlD1MBMsobZzNgpaSMYOHXMf+rKTrsIoyuzzSJdBXNEm56tBABHiruwYRB+Apt/mtVn+aC1cRrvOR88dr03ayFTv6Uc96uoSZ0EJwDSryFKp5wxBlNYGakqFyNtIKxFJbY+aKBHY+yC5I+as9BjZeRk9y/iU5CmlFUVj+YuU9zNQcss2zqXbI7moSPxclogehUNqayswpDqoAttSVVGP+Z90+O0jbng2Qe70zMGlbhg/ODbvtTWlkYmxzEsoThelc1M9JDrp+BHw1f62bgK9lEVvEA81zUCNjFStMCo6e89LKc/xa+wJUO+ZFLP5aCpmuwOMbltGHr36tzKONSy/N/aaouuV7P031yEd/7CTtTT1E5DCo0wv2u9antnRc3ddWfcSatIiRoJHiMh0KdpJNh8qNWAN0xH6jOc1MjZwTSsgIe3J15BMY8MNImZTDakxUzOid+RQ0OSOb7yXrjACfojnpATxzowdK/IRh7dicvtH03jRTk+rVHemo1IBAoBUSbwaMVBp/0gRL165pxGCARNI+0mc8MzZs5g8RQZonVjY5Ge23vluSZ2m3uz/z+n01CExqdcn0SHbI="
   file_glob: true
   file: build/dputils*
   name: "dputils $(date +%Y-%m-%d)"
