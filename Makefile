@@ -26,8 +26,8 @@ clean:
 	mkdir -p build
 
 install_deps:
-	GOOS=linux go get -d -v
-	GOOS=windows go get -d -v
-	GOOS=darwin go get -d -v
+	GOOS=linux go get -d -t -v
+	GOOS=windows go get -d -t -v
+	GOOS=darwin go get -d -t -v
 
 .PHONY: build build_bins build_zip clean $(PLATFORMS)
