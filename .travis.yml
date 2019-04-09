@@ -20,4 +20,4 @@ deploy:
   name: dputils $TRAVIS_TAG
   skip_cleanup: true
   on:
-    all_branches: true
+    branch: master
