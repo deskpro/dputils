@@ -41,7 +41,7 @@ func init() {
 		"k",
 		"",
 		`
-			 Path to a ZIP containing a database.sql file and an attachments/ folder. 
+			 Path to a ZIP containing a database.sql file and an attachments/ folder.
 			 You generate this from any existing Deskpro server by using the 'dputils backup' command.
 			 This can be a filesystem path, a HTTP URL, or a S3 URL.
 		`,
@@ -67,7 +67,7 @@ func init() {
 		"",
 		`
 			An additional information for audit database (it may be stored on a different mysql server).
-			If in your new config audit connection config exists we will restore audit db there otherwise we're going 
+			If in your new config audit connection config exists we will restore audit db there otherwise we're going
 			to restore audit database into default database.
 		`,
 	)
@@ -77,7 +77,7 @@ func init() {
 		"",
 		`
 			An additional information for system database (it may be stored on a different mysql server).
-			If in your new config system connection config exists we will restore system db there otherwise we're going 
+			If in your new config system connection config exists we will restore system db there otherwise we're going
 			to restore system database into default database.
 		`,
 	)
@@ -87,7 +87,7 @@ func init() {
 		"",
 		`
 			An additional information for voice database (it may be stored on a different mysql server).
-			If in your new config voice connection config exists we will restore voice db there otherwise we're going 
+			If in your new config voice connection config exists we will restore voice db there otherwise we're going
 			to restore voice database into default database.
 		`,
 	)
@@ -299,11 +299,16 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 	)
 	backupUri, _ = cmd.Flags().GetString("full-backup")
 	if backupUri != "" {
-		if backupUri, err = filepath.Abs(backupUri); err != nil {
-			log.Error("Can't find a full path to dump", backupUri)
-			fmt.Println("Backup path is wrong, please check the path for the backup archive carefully")
-			fmt.Println(err)
+		_, err = url.ParseRequestURI(backupUri)
+		if err != nil {
+			// not an URL with a scheme, so assume a filesystem path
+			if backupUri, err = filepath.Abs(backupUri); err != nil {
+				log.Error("Can't find a full path to dump", backupUri)
+				fmt.Println("Backup path is wrong, please check the path for the backup archive carefully")
+				fmt.Println(err)
+			}
 		}
+
 		fmt.Println("==========================================================================================")
 		fmt.Println("Detected a full backup flag. Restoring from the full backup archive")
 		fmt.Println("==========================================================================================")
@@ -312,6 +317,7 @@ func checkFullBackup(cmd *cobra.Command, tmpdir string) (bool, string) {
 		if err != nil {
 			log.Warning("Failed to get full backup archive ", err)
 			fmt.Println("Failed to get full backup archive")
+			fmt.Println("If using an URL, remember to include the scheme (http:// or https://)")
 			fmt.Println(err)
 			os.Exit(1)
 		}
