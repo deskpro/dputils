@@ -135,6 +135,7 @@ func addAttachmentsToTheZipFile(dpConfig map[string]string, dpPath string, zipFi
 		attachUri = filepath.Join(dpPath, "attachments")
 	}
 
+	zipFile.Create("attachments/")
 	addFilesToTheZip(zipFile, attachUri, "attachments")
 	fmt.Println("\t Done writing attachments")
 }
