@@ -1,9 +1,23 @@
 language: go
-gobuild_args: -i -ldflags "-s -w" -v
-go:
-  1.11.x
-install:
-  - go get -t -v ./...
-script: go test -test.v ./...
-
-
+before_install:
+  - curl -L https://github.com/upx/upx/releases/download/v3.95/upx-3.95-amd64_linux.tar.xz | sudo tar xJ --strip-components 1 -C /usr/local/bin upx-3.95-amd64_linux/upx
+script:
+  - make -j$(nproc)
+  - go test -test.v ./...
+before_deploy:
+  - git config --local user.name 'Deskpro'
+  - git config --local user.email 'team@deskpro.com'
+  - export TRAVIS_TAG=${TRAVIS_TAG:-$(date +'v%Y%m%d%H%M%S')}
+  - git tag $TRAVIS_TAG || true
+deploy:
+  provider: releases
+  api_key:
+    secure: hVxuUaBYet0t3tgXv9z9U1xjmVG4UMF38TYIZ+2ebJlFAxyoQUFB10KWBqI9sYy+f7j8kBiIQHaTtkTgac8LImujt2cXafaCusVrqKKAh6ccVPzcNuG13W4F4j/RQd5O5+C+QwhCfhOX81HhS6pAIEyQ+cMuZaSD1jc1kf3zc+Wcrdk7oM1XYTUUnQ7qyD1QQgrbQ3m1WPQj1uH5+wf7+T9PCyiEtnB3F2D/tQouxD28Ss7QVW5Dcpqe13kSZmQ/gwdcwGGwYELeivcAfRjCJAtKkacdh9+61Zv13qOJKToB2eO6IIgmuyRbZ/ibVa03NtdnW9a3r4gpDJr6z+mivU3cBmYosjy9QriClDMlOg2A1A2MgU4LLxfRj0cuKGBMsSFQG40mfRY5J5gmnqoklc60qjfgcQHFWGWUW7tBXuDZTLA7T2hHm2RVwmbTo2XVQ1XvhhyqJc6mCbhSOPqH6pMwLpIvpj5ffVfAUvu1C+l8Jsd3YojHrPaZsuUN9k/bYfBDcWIPAfFL5ZftWIwfJ6MxvW8gjezPjcFHh7RveVFwD5rdujPmdXsKFVMMj6K1+p0yNV8qsALUhAZYCm02ICiZ5i1s8yUn0jcgIuiyJzfRPgdIx2gvgrt8ygo2oUSueqIlpzmSGPnBdiPkg6Pi/LgSCVnvrO3lkWI2R330tmI=
+  file_glob: true
+  file:
+    - build/dputils*
+    - build/builds.zip
+  name: dputils $TRAVIS_TAG
+  skip_cleanup: true
+  on:
+    branch: master
