@@ -77,8 +77,8 @@ func GetMysqlConnectionFromConfig(dpConfig map[string]string, prefix string) (*s
 
 func GetMysqlUrlFromConfig(dpConfig map[string]string, prefix string) url.URL {
 	murl, err := url.Parse(
-		"mysql://" + dpConfig[prefix + ".user"] +
-			":" + dpConfig[prefix + ".password"] +
+		"mysql://" + url.QueryEscape(dpConfig[prefix + ".user"]) +
+			":" + url.QueryEscape(dpConfig[prefix + ".password"]) +
 			"@" + dpConfig[prefix + ".host"] +
 			"/" + dpConfig[prefix + ".dbname"])
 
