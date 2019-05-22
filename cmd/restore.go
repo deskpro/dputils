@@ -232,6 +232,12 @@ var restoreCmd = &cobra.Command{
 			dbDumpLocal, sourceMysqlConn = validateDeskproSource(cmd, tmpdir)
 			attachUri, moveAttachments = validateAttachments(cmd, sourceMysqlConn.Conn, tmpdir)
 		} else {
+			if cmd.Flags().Changed("mysql-direct") || cmd.Flags().Changed("mysql-dump") || cmd.Flags().Changed("attachments") {
+				log.Warning("Can't use mysql-direct, mysql-dump and attachments flags simultaneously with full-backup flag")
+				fmt.Println("Can't use mysql-direct, mysql-dump and attachments flags simultaneously with full-backup flag")
+				os.Exit(1)
+			}
+
 			moveAttachments = true
 			attachUri = transformAttachUri(filepath.Join(backupDir, "attachments"))
 			dbDumpLocal = getFullBackupDump(backupDir, "database")
@@ -1014,6 +1020,8 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 	var err error
 
 
+	aUrl, err := url.Parse(attachUri)
+	
 	if attachUri, err = filepath.Abs(attachUri); err != nil {
 		log.Error("Can't find a full path to dump", attachUri)
 		fmt.Println("Can't find a full path to attachments, please check your --attachments option carefully")
@@ -1021,7 +1029,7 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 		os.Exit(1)
 	}
 
-	aUrl, err := url.Parse(attachUri)
+	aUrl, err = url.Parse(attachUri)
 	if err != nil {
 		log.Info("--attachments contains wrong URI")
 		fmt.Println("You must specify a correct path for attachments with --attachments. See --help for more information.")
