@@ -1021,13 +1021,21 @@ func validateAttachments(cmd *cobra.Command, conn *sql.DB, tmpdir string) (strin
 
 
 	aUrl, err := url.Parse(attachUri)
-	
-	if attachUri, err = filepath.Abs(attachUri); err != nil {
-		log.Error("Can't find a full path to dump", attachUri)
-		fmt.Println("Can't find a full path to attachments, please check your --attachments option carefully")
-		fmt.Println(err)
+	if err != nil {
+		log.Info("--attachments contains wrong URI")
+		fmt.Println("You must specify a correct path for attachments with --attachments. See --help for more information.")
 		os.Exit(1)
 	}
+
+	if aUrl.Scheme == "" || aUrl.Scheme == "file" {
+		if attachUri, err = filepath.Abs(attachUri); err != nil {
+			log.Error("Can't find a full path to dump", attachUri)
+			fmt.Println("Can't find a full path to attachments, please check your --attachments option carefully")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+
 
 	aUrl, err = url.Parse(attachUri)
 	if err != nil {
