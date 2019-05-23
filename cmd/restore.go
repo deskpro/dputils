@@ -49,8 +49,7 @@ func init() {
 
 	restoreCmd.Flags().String(
 		"mysql-direct",
-		"",
-		`
+		"",		`
 			Connect directly to an existing MySQL server to copy it.
 			This is the recommended method because it doesn't require local disk space, the dump and import
 			can be streamed over the network.
@@ -374,61 +373,69 @@ func interactiveGatherOptions(cmd *cobra.Command) {
 		Details: "{{ .Help | yellow }}",
 	}
 
-	restoreOptions := []menuitem{
-		{"direct", "Direct connection to remote MySQL server", "This establishes a direct MySQL connection over the network. This requires the remote server to be open to network connections, and accessible from this server."},
-		{"dump", "Path/URL to a MySQL dump file", "Use this option if you have a MySQL dump (generated from the \"mysqldump\" utility)."},
-		{"backup", "Path/URL to a complete backup (ZIP containing both a MySQL dump and attachments)", "Use this option if you have made a complete backup using the \"dputils backup\" utility on your other server."},
-	}
+	var restoreMethod string
 
-	restoreMethodIdx, _, err := (&promptui.Select {
-		Label: "Restore Method",
-		Items: restoreOptions,
-		Templates: tpl,
-	}).Run()
+	if cmd.Flags().Changed("full-backup") {
+			restoreMethod = "backup"
+	} else if cmd.Flags().Changed("mysql-dump") {
+		restoreMethod = "dump"
+	} else if cmd.Flags().Changed("mysql-direct"){
+		restoreMethod = "direct"
+	} else {
+		restoreOptions := []menuitem{
+			{"direct", "Direct connection to remote MySQL server", "This establishes a direct MySQL connection over the network. This requires the remote server to be open to network connections, and accessible from this server."},
+			{"dump", "Path/URL to a MySQL dump file", "Use this option if you have a MySQL dump (generated from the \"mysqldump\" utility)."},
+			{"backup", "Path/URL to a complete backup (ZIP containing both a MySQL dump and attachments)", "Use this option if you have made a complete backup using the \"dputils backup\" utility on your other server."},
+		}
 
-	if err != nil {
-		log.Error("restore method prompt failed: ", err)
-		fmt.Printf("Invalid input: %v\n", err)
-		os.Exit(1)
-	}
+		restoreMethodIdx, _, err := (&promptui.Select {
+			Label: "Restore Method",
+			Items: restoreOptions,
+			Templates: tpl,
+		}).Run()
 
-	restoreMethod := restoreOptions[restoreMethodIdx].Id
-
-	log.Info("restoreMethod: ", restoreMethod)
+		if err != nil {
+			log.Error("restore method prompt failed: ", err)
+			fmt.Printf("Invalid input: %v\n", err)
+			os.Exit(1)
+		}
+		restoreMethod = restoreOptions[restoreMethodIdx].Id
+		log.Info("restoreMethod: ", restoreMethod)
 
 	switch restoreMethod {
-	case "direct":
-		mysqlUri, err := interactivePromptMysqlUri()
-		if err != nil {
-			os.Exit(1)
+		case "direct":
+			mysqlUri, err := interactivePromptMysqlUri()
+			if err != nil {
+				os.Exit(1)
+			}
+			_ = cmd.Flags().Set("mysql-direct", mysqlUri)
+
+		case "dump":
+			dumpUrl, err = (&promptui.Prompt{
+				Label: "Path or URL to dump",
+			}).Run()
+
+			if err != nil {
+				fmt.Printf("Invalid input: %v\n", err)
+				os.Exit(1)
+			}
+
+			log.Info("dump url: ", dumpUrl)
+			_ = cmd.Flags().Set("mysql-dump", dumpUrl)
+
+		case "backup":
+			backupUrl, err = (&promptui.Prompt{
+				Label: "Path or URL to backup archive",
+			}).Run()
+
+			if err != nil {
+				fmt.Printf("Invalid input: %v\n", err)
+				os.Exit(1)
+			}
+
+			log.Info("backup url: ", backupUrl)
+			_ = cmd.Flags().Set("full-backup", backupUrl)
 		}
-		_ = cmd.Flags().Set("mysql-direct", mysqlUri)
-
-	case "dump":
-		dumpUrl, err = (&promptui.Prompt{
-			Label: "Path or URL to dump",
-		}).Run()
-
-		if err != nil {
-			fmt.Printf("Invalid input: %v\n", err)
-			os.Exit(1)
-		}
-
-		log.Info("dump url: ", dumpUrl)
-		_ = cmd.Flags().Set("mysql-dump", dumpUrl)
-
-	case "backup":
-		backupUrl, err = (&promptui.Prompt{
-			Label: "Path or URL to backup archive",
-		}).Run()
-
-		if err != nil {
-			fmt.Printf("Invalid input: %v\n", err)
-			os.Exit(1)
-		}
-
-		log.Info("backup url: ", backupUrl)
-		_ = cmd.Flags().Set("full-backup", backupUrl)
 	}
 
 	if restoreMethod != "backup" {
