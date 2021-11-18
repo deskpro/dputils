@@ -1,4 +1,8 @@
+os: linux
+dist: focal
 language: go
+go:
+  - 1.11.5
 before_install:
   - curl -L https://github.com/upx/upx/releases/download/v3.95/upx-3.95-amd64_linux.tar.xz | sudo tar xJ --strip-components 1 -C /usr/local/bin upx-3.95-amd64_linux/upx
 script:
