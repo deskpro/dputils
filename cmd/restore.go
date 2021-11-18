@@ -1261,7 +1261,7 @@ func restoreDatabase(destinationMysqlConn util.MysqlConn, sourceMysqlConn util.M
 			"-C",
 		}
 		if remoteMysqlPass != "" {
-			remoteArgs = append(remoteArgs, "--password=remoteMysqlPass")
+			remoteArgs = append(remoteArgs, "--password="+remoteMysqlPass)
 		}
 		remoteArgs = append(remoteArgs, strings.TrimLeft(sourceMysqlConn.MysqlUrl.Path, "/"))
 
