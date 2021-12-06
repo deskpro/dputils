@@ -14,7 +14,7 @@ build: build_bins build_zip
 $(PLATFORMS): install_deps
 	@if [ ! -d build ]; then mkdir -p build; fi
 	GOOS=$(os) GOARCH=$(arch) go build -ldflags "-s -w" -o build/dputils_$(os)_$(arch)$(sfx)
-	test "$(PACK_EXECUTABLES)" = 1 && upx --best build/dputils_$(os)_$(arch)$(sfx)
+	test "$(PACK_EXECUTABLES)" = 1 && upx --best build/dputils_$(os)_$(arch)$(sfx) || echo skipping upx
 
 build_bins: $(PLATFORMS)
 

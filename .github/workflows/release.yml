@@ -1,0 +1,53 @@
+---
+name: Release dputils
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: '1.16'
+      - run: make
+      - run: go test -test.v ./...
+      - uses: actions/github-script@v5
+        with:
+          script: |
+            const { readdirSync, readFileSync } = require("fs");
+
+            const now = new Date();
+            const tag = "v" + now.toISOString().replace(/\..*Z$/, '').replace(/[-:T]/g, '');
+
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tag}`,
+              sha: context.sha,
+            });
+
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              draft: true,
+            });
+
+            for (const file of readdirSync("build", { withFileTypes: true })) {
+              if (file.isFile()) {
+                if (file.name === "builds.zip" || file.name.startsWith("dputils")) {
+                  await github.rest.repos.uploadReleaseAsset({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.data.id,
+                    name: file.name,
+                    data: readFileSync(`build/${file.name}`),
+                  });
+                }
+              }
+            }
+
