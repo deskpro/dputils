@@ -4,9 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	"github.com/deskpro/dputils/util"
-	"github.com/spf13/cobra"
-	"gopkg.in/cheggaaa/pb.v2"
 	"io"
 	"io/ioutil"
 	"os"
@@ -14,6 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cheggaaa/pb/v3"
+	"github.com/deskpro/dputils/util"
+	"github.com/spf13/cobra"
 )
 
 func init() {
@@ -116,8 +117,6 @@ var backupCmd = &cobra.Command{
 			addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter)
 		}
 
-
-
 		if target == "public" {
 			targetName = "http://your-deskpro-url/assets/" + fileName
 		}
@@ -169,7 +168,7 @@ func addFilesToTheZip(zipFile *zip.Writer, uri string, zipPath string) {
 			if err != nil {
 				fmt.Println(err)
 			}
-			if size > 10 * 1024 * 1024 {
+			if size > 10*1024*1024 {
 				if err := zipFile.Flush(); err != nil {
 					fmt.Println("Can't flush data")
 					os.Exit(1)
@@ -226,7 +225,7 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 	reader, writer := io.Pipe()
 	dumpCmd := exec.Command(
 		mysqlDumpBin,
-		remoteArgs...
+		remoteArgs...,
 	)
 
 	var dumpBuff bytes.Buffer
@@ -248,5 +247,5 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		fmt.Println(dumpBuff.String())
 		os.Exit(1)
 	}
-	fmt.Println("\tDone writing the " + dbName +" dump file to zip archive")
+	fmt.Println("\tDone writing the " + dbName + " dump file to zip archive")
 }
