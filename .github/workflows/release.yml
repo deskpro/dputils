@@ -35,6 +35,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: tag,
               draft: true,
+              name: `dputils ${tag}`,
             });
 
             for (const file of readdirSync("build", { withFileTypes: true })) {
@@ -50,4 +51,11 @@ jobs:
                 }
               }
             }
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              draft: false,
+            });
 
