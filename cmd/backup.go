@@ -3,6 +3,9 @@ package cmd
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +18,7 @@ import (
 	"github.com/cheggaaa/pb/v3"
 	"github.com/deskpro/dputils/util"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/scrypt"
 )
 
 func init() {
@@ -45,6 +49,14 @@ func init() {
 		`
 				Provide "database" or "attachments" to backup just
                 that thing. If not specified, both are backed up.
+		`,
+	)
+
+	backupCmd.Flags().String(
+		"migration-secret",
+		"",
+		`
+				Provide a secret to use to encrypt the database dump.
 		`,
 	)
 
@@ -107,11 +119,12 @@ var backupCmd = &cobra.Command{
 		defer zipFile.Close()
 		zipFileWriter := zip.NewWriter(zipFile)
 		defer zipFileWriter.Close()
+		encryptionSecret, _ := cmd.Flags().GetString("migration-secret")
 		if what == "database" || what == "" {
-			addDumpToTheZipFile(dpConfig, "", zipFileWriter)
-			addDumpToTheZipFile(dpConfig, "audit", zipFileWriter)
-			addDumpToTheZipFile(dpConfig, "voice", zipFileWriter)
-			addDumpToTheZipFile(dpConfig, "system", zipFileWriter)
+			addDumpToTheZipFile(dpConfig, "", zipFileWriter, encryptionSecret)
+			addDumpToTheZipFile(dpConfig, "audit", zipFileWriter, encryptionSecret)
+			addDumpToTheZipFile(dpConfig, "voice", zipFileWriter, encryptionSecret)
+			addDumpToTheZipFile(dpConfig, "system", zipFileWriter, encryptionSecret)
 		}
 		if what == "attachments" || what == "" {
 			addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter)
@@ -185,7 +198,7 @@ func addFilesToTheZip(zipFile *zip.Writer, uri string, zipPath string) {
 	bar.Finish()
 }
 
-func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Writer) {
+func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip.Writer, encryptionSecret string) {
 
 	var prefix string
 	if dbType == "" {
@@ -235,8 +248,14 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 	zipWriter, _ := zipFile.Create(prefix + ".sql")
 	go func() {
 		defer reader.Close()
-		if _, err := io.Copy(zipWriter, reader); err != nil {
-			fmt.Println(err)
+		if encryptionSecret == "" {
+			if _, err := io.Copy(zipWriter, reader); err != nil {
+				fmt.Println(err)
+			}
+		} else {
+			if err := encryptDump(reader, zipWriter, encryptionSecret); err != nil {
+				fmt.Println(err)
+			}
 		}
 	}()
 
@@ -248,4 +267,109 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		os.Exit(1)
 	}
 	fmt.Println("\tDone writing the " + dbName + " dump file to zip archive")
+}
+
+const (
+	BUFFER_SIZE  int = 16 * 1024
+	IV_SIZE      int = 16
+	AES_KEY_SIZE int = 32 // 256 bits - The size of the AES key.
+	SALT_SIZE    int = 32 // 256 bits
+
+	// The number of iterations to use in for key generation
+	// See N value in https://godoc.org/golang.org/x/crypto/scrypt#Key
+	// Must be a power of 2.
+	KEYGEN_ITERATIONS int32 = 262144 // 2^18
+)
+
+// Encrypt the stream using the given AES-CTR key
+func encryptDump(in io.Reader, out io.Writer, secret string) error {
+
+	salt, err := randBytes(SALT_SIZE)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	keyAes, err := deriveKeys([]byte(secret), salt, int(KEYGEN_ITERATIONS))
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	iv := make([]byte, IV_SIZE)
+	_, err = rand.Read(iv)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	AES, err := aes.NewCipher(keyAes)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	ctr := cipher.NewCTR(AES, iv)
+
+	_, err = out.Write(salt)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	_, err = out.Write(iv)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	buf := make([]byte, BUFFER_SIZE)
+	for {
+		n, err := in.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Println(err)
+				return err
+			} else {
+				fmt.Println(err)
+			}
+		}
+
+		if n != 0 {
+			outBuf := make([]byte, n)
+			ctr.XORKeyStream(outBuf, buf[:n])
+			_, err = out.Write(outBuf)
+			if err != nil {
+				fmt.Println(err)
+				return err
+			}
+		}
+
+		if err == io.EOF {
+			fmt.Println(err)
+			break
+		}
+	}
+
+	return nil
+}
+
+// Derives AES key from a password and salt.
+func deriveKeys(pass, salt []byte, iterations int) ([]byte, error) {
+
+	keySize := AES_KEY_SIZE
+	key, err := scrypt.Key(pass, salt, iterations, 8, 1, keySize)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	aesKey := []byte{}
+	aesKey = append(aesKey, key[:AES_KEY_SIZE]...)
+	return aesKey, nil
+}
+
+// randBytes returns random bytes in a byte slice of size.
+func randBytes(size int) ([]byte, error) {
+	b := make([]byte, size)
+	_, err := rand.Read(b)
+	return b, err
 }
