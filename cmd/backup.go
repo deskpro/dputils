@@ -269,33 +269,22 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 	fmt.Println("\tDone writing the " + dbName + " dump file to zip archive")
 }
 
-const (
-	BUFFER_SIZE  int = 16 * 1024
-	IV_SIZE      int = 16
-	AES_KEY_SIZE int = 32 // 256 bits - The size of the AES key.
-	SALT_SIZE    int = 32 // 256 bits
-
-	// The number of iterations to use in for key generation
-	// See N value in https://godoc.org/golang.org/x/crypto/scrypt#Key
-	// Must be a power of 2.
-	KEYGEN_ITERATIONS int32 = 262144 // 2^18
-)
-
 // Encrypt the stream using the given AES-CTR key
 func encryptDump(in io.Reader, out io.Writer, secret string) error {
-
-	salt, err := randBytes(SALT_SIZE)
+	saltSize := 32 // 256 bits
+	salt, err := randBytes(saltSize)
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
-	keyAes, err := deriveKeys([]byte(secret), salt, int(KEYGEN_ITERATIONS))
+	keyAes, err := deriveKeys([]byte(secret), salt)
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
 
-	iv := make([]byte, IV_SIZE)
+	ivSize := 16
+	iv := make([]byte, ivSize)
 	_, err = rand.Read(iv)
 	if err != nil {
 		fmt.Println(err)
@@ -322,7 +311,8 @@ func encryptDump(in io.Reader, out io.Writer, secret string) error {
 		return err
 	}
 
-	buf := make([]byte, BUFFER_SIZE)
+	bufferSize := 16 * 1024
+	buf := make([]byte, bufferSize)
 	for {
 		n, err := in.Read(buf)
 		if err != nil {
@@ -354,16 +344,20 @@ func encryptDump(in io.Reader, out io.Writer, secret string) error {
 }
 
 // Derives AES key from a password and salt.
-func deriveKeys(pass, salt []byte, iterations int) ([]byte, error) {
+func deriveKeys(pass, salt []byte) ([]byte, error) {
+	// The number of iterations to use in for key generation
+	// See N value in https://godoc.org/golang.org/x/crypto/scrypt#Key
+	// Must be a power of 2.
+	iterations := int(262144) // 2^18
 
-	keySize := AES_KEY_SIZE
+	keySize := 32 // 256 bits - The size of the AES key.
 	key, err := scrypt.Key(pass, salt, iterations, 8, 1, keySize)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
 	}
 	aesKey := []byte{}
-	aesKey = append(aesKey, key[:AES_KEY_SIZE]...)
+	aesKey = append(aesKey, key[:keySize]...)
 	return aesKey, nil
 }
 
