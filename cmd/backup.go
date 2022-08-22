@@ -319,8 +319,6 @@ func encryptDump(in io.Reader, out io.Writer, secret string) error {
 			if err != io.EOF {
 				fmt.Println(err)
 				return err
-			} else {
-				fmt.Println(err)
 			}
 		}
 
