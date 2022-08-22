@@ -12,4 +12,5 @@ require (
 	github.com/manifoldco/promptui v0.9.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.2.1
+	golang.org/x/crypto v0.0.0-20220817201139-bc19a97f63c8 // indirect
 )
