@@ -53,6 +53,10 @@ func init() {
 		"",
 		`
 				Provide a secret to use to encrypt the database dump.
+				
+				Note that providing with this flag will encrypt the backup using
+				the AES encryption method so any application that is required to
+				extract the archive will need to support this encyption method.
 		`,
 	)
 
