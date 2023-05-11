@@ -264,7 +264,6 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 	fmt.Println("\tDone writing the " + dbName + " dump file to zip archive")
 }
 
-// php /usr/share/nginx/html/deskpro/bin/console dp:utility:deskpro-horizon-check-reqs
 func addMetadataToTheZipFile(dpConfig map[string]string, config *util.Config, zipFile *zip.Writer, encryptionSecret string) {
 	out, err := exec.Command(config.PhpPath(), filepath.Join(config.DpPath(), "bin", "console"), "dp:utility:deskpro-horizon-check-reqs").Output()
 	if err != nil {
