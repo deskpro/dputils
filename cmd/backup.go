@@ -283,10 +283,14 @@ func addMetadataToTheZipFile(dpConfig map[string]string, config *util.Config, zi
 	f, err := util.ZipCreate(zipFile, "v5_metadata.json", encryptionSecret)
 	if err != nil {
 		fmt.Println(err)
+		fmt.Println("\tFailed writing metadata")
+		return
 	}
 	_, err = f.Write(out)
 	if err != nil {
 		fmt.Println(err)
+		fmt.Println("\tFailed writing metadata")
+		return
 	}
 
 	fmt.Println("\tDone writing metadata")
