@@ -125,6 +125,7 @@ var backupCmd = &cobra.Command{
 			addDumpToTheZipFile(dpConfig, "audit", zipFileWriter, encryptionSecret)
 			addDumpToTheZipFile(dpConfig, "voice", zipFileWriter, encryptionSecret)
 			addDumpToTheZipFile(dpConfig, "system", zipFileWriter, encryptionSecret)
+			addMetadataToTheZipFile(dpConfig, &Config, zipFileWriter, encryptionSecret)
 		}
 		if what == "attachments" || what == "" {
 			addAttachmentsToTheZipFile(dpConfig, Config.DpPath(), zipFileWriter, encryptionSecret)
@@ -261,4 +262,36 @@ func addDumpToTheZipFile(dpConfig map[string]string, dbType string, zipFile *zip
 		os.Exit(1)
 	}
 	fmt.Println("\tDone writing the " + dbName + " dump file to zip archive")
+}
+
+func addMetadataToTheZipFile(dpConfig map[string]string, config *util.Config, zipFile *zip.Writer, encryptionSecret string) {
+	out, err := exec.Command(config.PhpPath(), filepath.Join(config.DpPath(), "bin", "console"), "dp:utility:deskpro-horizon-check-reqs").Output()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == 1 {
+				// exit code of 1 means the command does not exist
+				return
+			}
+		} else {
+			// couldn't get exit code
+			return
+		}
+	}
+
+	fmt.Println("Writing metadata")
+
+	f, err := util.ZipCreate(zipFile, "v5_metadata.json", encryptionSecret)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("\tFailed writing metadata")
+		return
+	}
+	_, err = f.Write(out)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("\tFailed writing metadata")
+		return
+	}
+
+	fmt.Println("\tDone writing metadata")
 }
