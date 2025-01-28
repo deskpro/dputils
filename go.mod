@@ -8,7 +8,7 @@ require (
 	github.com/cheggaaa/pb/v3 v3.0.8
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-sql-driver/mysql v1.6.0
-	github.com/golang/glog v1.1.0
+	github.com/golang/glog v1.2.4
 	github.com/hashicorp/go-getter v1.7.5
 	github.com/manifoldco/promptui v0.9.0
 	github.com/sirupsen/logrus v1.8.1
@@ -28,7 +28,7 @@ require (
 	github.com/fatih/color v1.10.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/google/go-cmp v0.5.9 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.2.3 // indirect
 	github.com/googleapis/gax-go/v2 v2.7.1 // indirect
